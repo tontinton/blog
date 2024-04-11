@@ -499,7 +499,7 @@ To understand why this is, imagine a database operating on a single machine. It 
 Now imagine a database operating on 2 machines with separate CPUs, memory and disks, connected through some cable. When a request to one of the machines fails, for whatever reason, the system can choose to do one of the following:
 
 * Cancel the request, thus sacrificing *availability* for *consistency*.
-* Allow the request to continue only on the working machine, meaning once the other machine will now have inconsistent data (reads from it will not return the most recent write), thus sacrificing *consistency* for *availability*. When a system does this, it is called eventually consistent. 
+* Allow the request to continue only on the working machine, meaning our other machine will now have inconsistent data (reads from it will not return the most recent write), thus sacrificing *consistency* for *availability*. When a system does this, it is called eventually consistent. 
 
 > Network partitioning also means that you lose the ability to efficiently `JOIN` data, as you now need to pull together scattered data throughout the cluster. To mitigate that the `NoSQL` movement of databases tell you to <a href="https://en.wikipedia.org/wiki/Denormalization">denormalize</a> your data.
 

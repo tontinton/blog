@@ -230,7 +230,7 @@ What we really want is to sleep when we have nothing *useful* to do. I.e. When t
 
 The reasons we want this are:
 
-* To be good neighbours to other applications are running on the same machine, and not take CPU cycles they might want to utilize.
+* To be good neighbours to other applications running on the same machine, and not take CPU cycles they might want to utilize.
 * The more the CPU runs, the more energy it takes:
   * Worse battery life.
   * More expensive.
