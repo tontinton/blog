@@ -829,7 +829,7 @@ The simplest way to achieve multi-core scheduling, is to do exactly as before. H
 
 You just need to ensure that the task queue is thread-safe for `MPMC` operations (multi-producer multi-consumer), by using atomics or locks.
 
-`MPMC` queues are a lot slower than the more restrictive `SPMC` (single-producer multi-consumer) queues, which is why Go decided to have a fixed size `SPMC` queue for each scheduler (Go runs a scheduler per core configured by `GOMAXPROCS`), with a global `MPSC` queue to push to when the `SPMC` queue is full.
+`MPMC` queues are a lot slower than the more restrictive `SPMC` (single-producer multi-consumer) queues, which is why Go decided to have a fixed size `SPMC` queue for each scheduler (Go runs a scheduler per core configured by `GOMAXPROCS`), with a global `MPMC` queue to push to when the `SPMC` queue is full.
 
 To ensure all cores are fully utilized, when a core is free to run but has nothing in its local queue and there are no tasks in the global queue, it **steals** tasks from other local queues (which is why they are multi-consumer).
 
