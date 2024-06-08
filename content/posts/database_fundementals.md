@@ -1,6 +1,7 @@
 +++
 title = "Database Fundamentals"
 date = "2023-12-15"
+description = "The fundamental problems a database engineer thinks about in the shower"
 +++
 
 About a year ago, I tried thinking which database I should choose for my next project, and came to the realization that I don't really know the differences of databases enough. I went to different database websites and saw mostly marketing and words I don't understand.
