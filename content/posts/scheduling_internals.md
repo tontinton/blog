@@ -2,6 +2,12 @@
 title = "Scheduling Internals"
 date = "2024-02-25"
 description = "Wait, but how does async even work? (Animated)"
+
+[extra]
+preloads = [
+    "/scheduling.min.js",
+    "/pixi.min.js",
+]
 +++
 
 <div class="block" style="margin-top: 30px; height: 600px">
