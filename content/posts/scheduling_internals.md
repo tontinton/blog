@@ -761,7 +761,7 @@ Stackful and stackless impact the API greatly, each with its own advantages and 
 go fmt.Println("world")
 fmt.Println("hello")
 ```
-* **Stackless** - If you have ever used a language with `async` & `await`, you used a stackless implementation. Examples include Rust and Python's `asyncio`. Rust's `async` transforms a block of code into a state machine that is not run until you `await` it. The biggest advantage of this approach is how <a href="https://pkolaczk.github.io/memory-consumption-of-async/">lightweight it is at runtime</a>, memory is allocated exactly as needed, which served well for Rust's embedded use case as well. The main problem with this approach is "function coloring". An `async` function can only be called inside another `async` function:
+* **Stackless** - If you have ever used a language with `async` & `await`, you've used a stackless implementation. Examples include Rust and Python's `asyncio`. Rust's `async` transforms a block of code into a state machine that is not run until you `await` it. The biggest advantage of this approach is how <a href="https://pkolaczk.github.io/memory-consumption-of-async/">lightweight it is at runtime</a>, memory is allocated exactly as needed, which served well for Rust's embedded use case as well. The main problem with this approach is "function coloring". An `async` function can only be called inside another `async` function:
 ```rs
 async fn say() {
     println!("hello world");
