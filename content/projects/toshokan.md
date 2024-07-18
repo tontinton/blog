@@ -1,6 +1,6 @@
 +++
 title = "toshokan"
-description = "Inverted index on blob storage - Rust"
+description = "Inverted index on object storage - Rust"
 weight = 3
 
 [extra]
