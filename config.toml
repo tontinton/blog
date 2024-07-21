@@ -16,6 +16,7 @@ highlight_theme = "dracula"
 [extra]
 toc = false
 use_cdn = false
+favicon = "/favicon.png"
 
 theme = "toggle" # light, dark, auto, toggle
 
