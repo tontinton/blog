@@ -221,6 +221,7 @@ Let's say you provide them the following two strings: "My dog ate my food!", "My
 | dog   |      0, 1 |
 | ate   |         0 |
 | food  |         0 |
+| cat   |         1 |
 | likes |         1 |
 
 The tokenizer may also stem words and convert "changing", "changed" and "change" into "chang", so searching for "change" will find "My dog is changing". The inverted index may also store how many times a word comes up in each document, for sorting more relevant results on a search (the algorithm used is <a href="https://en.wikipedia.org/wiki/Okapi_BM25">BM25</a>). There's more to it, but I think you get the idea.
