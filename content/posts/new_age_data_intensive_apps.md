@@ -27,7 +27,7 @@ I hope this can serve as a guide to deciding whether object storage is the corre
 
 Before we begin, here's a quick intro to what makes an object storage (also sometimes called blob storage).
 
-Object storage is a service that is a kind of key-value database, that is very cheap to store huge amounts of unstructured data called blobs on. "Blob" stands for "Binary large object".
+Object storage is a service that is a kind of key-value database, that is very cheap to store huge amounts of unstructured data called blobs. "Blob" stands for "Binary large object".
 
 They usually store data on the cheapest hardware, using HDDs instead of SSDs (until they'll be <a href="https://thecuberesearch.com/qlc-flash-hamrs-hdd/">cheaper</a>).
 
