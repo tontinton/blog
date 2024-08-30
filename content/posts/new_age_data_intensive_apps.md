@@ -164,6 +164,8 @@ It would allow you to implement optimistic concurrency control right over the ob
 
 This will be less efficient in most cases than using Postgres, as you would need to upload a whole metadata file for each change, but it's much simpler when you don't need speed.
 
+> Tony from the future here: AWS has just announced <a href="https://aws.amazon.com/about-aws/whats-new/2024/08/amazon-s3-conditional-writes/">conditional writes</a>, really exciting. Do you think this post had an influence? Probably not 🙃
+
 # Implementation tips
 
 It used to be that you would need to roll your own abstraction over object storages.
