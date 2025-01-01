@@ -271,9 +271,19 @@ For most use cases, the drawbacks are so minor compared to the advantages, I tru
 
 It's not open-source, which means I can't recommend it.
 
-> If you're from WarpStream, please understand that being a proprietary solution in this market holds you back.
+> If you're from WarpStream (now Confluent?), please understand that I don't want support, I want to read code when stuff doesn't work.
 
-As you can probably already guess, WarpStream is ~5x cheaper and simpler to operate as everything is stateless.
+Main differences with Kafka are:
+* No leader / followers.
+* Max latency starts at 250ms, as the WarpStream agents (the stateless service) buffer records in memory, and flush after 250ms have passed. This is only the default and can be modified, but lowering the time to flush will mean it's less cost efficient (more PUT / GET requests to S3).
+
+The WarpStream devs understand S3's drawbacks well, they have implemented multiple nice tricks to design against them:
+* Getting good throughput on S3 by distributing written records to multiple agents, and letting them write to S3 in parallel.
+* Data locality for reads. Each agent is elected to specific split files. When an agent receives a request to a split file not owned by it, it will redirect the request to the owner agent, which caches these files in memory. This is especially useful as the most common pattern in a stream is to read from the end, meaning most read requests will want to read the latest file, which is most likely to be cached in memory.
+* Data locality for historical reads. Split files are combined, sorted and compacted to allow for better efficiency when reading old historical records serially one after another.
+* Can be configured to write new data to S3 Express, which is the most likely data to be read in a stream, and write old data (after compaction) to standard S3.
+
+As you can probably already guess, WarpStream is ~5-10x cheaper than Kafka, and much simpler to operate as it's stateless.
 
 Other than being new and mostly unproven *yet*, it has a pretty big problem. Try to guess what it is 😊
 
