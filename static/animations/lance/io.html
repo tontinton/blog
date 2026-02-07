@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Parquet vs Lance: I/O Patterns</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #242630;
+  --surface: #44475a;
+  --text: #f8f8f2;
+  --muted: #8292c9;
+  --accent: #bd93f9;
+  --gold: #f1fa8c;
+  --green: #50fa7b;
+  --red: #ff5555;
+  --border: rgba(68, 71, 90, 0.5);
+  --mono: 'DejaVu Sans Mono', monospace;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'DejaVu Sans', sans-serif;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px;
+  gap: 8px;
+}
+
+/* ── Query Tabs ── */
+.query-tabs { display: flex; gap: 8px; }
+
+.query-tab {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  padding: 10px 20px; min-width: 280px;
+  background: var(--surface); border: 2px solid #333; border-radius: 8px;
+  color: var(--text); cursor: pointer; font-size: 16px; transition: all 0.15s;
+}
+.query-tab:hover { border-color: #555; background: #1e2d50; }
+.query-tab.active { border-color: var(--accent); background: #1e2d50; }
+.query-tab code { font-family: var(--mono); font-size: 12px; color: #888; }
+.query-tab.active code { color: #aaf; }
+
+/* ── Canvas ── */
+#canvas-wrapper { width: 100%; position: relative; }
+#canvas { position: relative; width: 1200px; height: 480px; transform-origin: top left; }
+
+.col-title {
+  position: absolute; top: 8px; font-size: 17px; font-weight: bold;
+  color: #ccc; pointer-events: none; transform: translateX(-50%);
+}
+
+/* ── Blocks ── */
+.block {
+  position: absolute; border-radius: 5px; display: flex; align-items: center;
+  padding: 0 10px; font-family: var(--mono); font-size: 12px;
+  border: 2px solid transparent;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3); overflow: hidden;
+  transition: opacity 0.3s, filter 0.3s, border-color 0.3s, box-shadow 0.3s;
+}
+.block.reading {
+  border-color: rgba(255,215,0,0.8);
+  box-shadow: 0 0 16px rgba(255,215,0,0.3), inset 0 0 25px rgba(255,215,0,0.08);
+  animation: pulse 0.9s ease-in-out infinite; z-index: 3;
+}
+.block.completed {
+  border-color: rgba(0,200,83,0.5);
+  box-shadow: 0 0 10px rgba(0,200,83,0.15); z-index: 1;
+}
+.block.skipped { opacity: 0.28; filter: saturate(0.15) brightness(0.5); }
+@keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.02); } }
+
+.partial-mask {
+  position: absolute; top: -2px; right: -2px; bottom: -2px;
+  background: rgba(0,0,0,0.6); border-radius: 0 5px 5px 0; pointer-events: none;
+}
+.block-divider {
+  position: absolute; top: 3px; bottom: 3px; width: 2px;
+  background: rgba(255,255,255,0.2); pointer-events: none;
+}
+
+/* ── Row Group Brackets ── */
+.rg-bracket {
+  position: absolute; width: 8px;
+  border-left: 1.5px solid rgba(255,255,255,0.3);
+  border-top: 1.5px solid rgba(255,255,255,0.3);
+  border-bottom: 1.5px solid rgba(255,255,255,0.3);
+}
+.rg-label {
+  position: absolute; font-family: var(--mono); font-size: 13px;
+  color: rgba(255,255,255,0.3); transform: translate(-50%,-50%) rotate(-90deg);
+  white-space: nowrap; pointer-events: none;
+}
+
+/* ── Step Panel ── */
+#step-panel {
+  position: absolute; left: 420px; top: 29px; width: 360px;
+  background: rgba(22,33,62,0.95); border: 1px solid var(--border);
+  border-radius: 10px; padding: 14px 16px; z-index: 10;
+}
+.sp-query { font-size: 12px; color: var(--muted); text-align: center; font-family: var(--mono); margin-bottom: 6px; min-height: 14px; }
+.sp-step { font-size: 16px; font-weight: bold; color: #fff; text-align: center; margin-bottom: 2px; min-height: 20px; }
+.sp-label { font-size: 14px; color: var(--gold); text-align: center; margin-bottom: 8px; min-height: 18px; }
+.sp-sep { border: none; border-top: 1px solid rgba(68,68,119,0.3); margin: 8px 0; }
+.sp-hdr { font-family: var(--mono); font-size: 14px; color: #99b; font-weight: bold; margin-bottom: 2px; }
+.sp-desc { font-family: var(--mono); font-size: 12px; color: #ccc; min-height: 26px; line-height: 1.4; }
+.sp-sum-title { font-size: 14px; font-weight: bold; color: #fff; text-align: center; margin-bottom: 8px; }
+.sp-sum-line { font-family: var(--mono); font-size: 11px; color: #ccc; margin-bottom: 4px; }
+.sp-sum-note { font-family: var(--mono); font-size: 10px; color: var(--green); font-style: italic; margin-top: 6px; line-height: 1.4; }
+
+/* ── I/O Labels ── */
+.io-label {
+  position: absolute; font-family: var(--mono); font-size: 12px; font-weight: bold;
+  opacity: 0; transition: opacity 0.4s; pointer-events: none; line-height: 1.4; z-index: 10;
+}
+.io-label.visible { opacity: 1; }
+
+/* ── Note ── */
+.note {
+  position: absolute; font-family: var(--mono); font-size: 10px;
+  color: var(--muted); pointer-events: none; transform: translateX(-50%);
+}
+
+/* ── SVG ── */
+#svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; }
+.arrow-path { fill: none; stroke-width: 2.5; stroke-linecap: round; }
+.arrow-path.faded, .arrow-head.faded { opacity: 0.25; transition: opacity 0.4s; }
+.no-transitions, .no-transitions * { transition: none !important; }
+
+/* ── Controls ── */
+.controls {
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 24px; border-radius: 8px;
+  margin-top: -10px;
+}
+.controls button {
+  background: #2a2a4a; color: var(--text); border: 1px solid #444;
+  padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px;
+  transition: all 0.15s; user-select: none;
+}
+#btn-play { min-width: 100px; height: 35px; }
+.controls button:hover:not(:disabled) { background: #3a3a5a; border-color: #666; }
+.controls button:disabled { opacity: 0.4; cursor: default; }
+#speed { width: 100px; accent-color: var(--accent); }
+.controls label { font-size: 14px; color: #aaa; display: flex; align-items: center; gap: 6px; }
+#speed-val { display: inline-block; width: 36px; text-align: right; }
+
+/* ── Responsive ── */
+@media (max-width: 900px) {
+  .query-tabs { flex-wrap: wrap; }
+  .query-tab { min-width: 0; flex: 1 1 100%; padding: 8px 12px; font-size: 14px; }
+  .query-tab code { font-size: 10px; }
+  #step-panel { position: static !important; width: auto !important; left: auto !important; top: auto !important; margin: 0; }
+  .controls { flex-wrap: wrap; gap: 8px; padding: 8px 12px; justify-content: center; margin-top: 0; }
+  .controls button { padding: 6px 10px; font-size: 13px; }
+  #btn-play { min-width: 80px; height: 32px; }
+  #speed { width: 80px; }
+  .controls label { font-size: 13px; }
+  .io-label { display: none !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="query-tabs">
+  <button class="query-tab active" data-query="random">
+    <strong>Random Read</strong>
+    <code>SELECT col_b WHERE id = 100</code>
+  </button>
+  <button class="query-tab" data-query="scan">
+    <strong>Sequential Scan</strong>
+    <code>SELECT COUNT(*) GROUP BY col_b</code>
+  </button>
+</div>
+
+<div id="canvas-wrapper">
+<div id="canvas">
+  <div class="col-title" style="left:220px">Apache Parquet</div>
+  <div class="col-title" style="left:980px">Lance</div>
+  <div class="note" style="left:980px;top:425px">(no row groups)</div>
+  <div class="io-label" id="io-random" style="left:388px;top:206px;color:var(--red)">Random<br>I/O</div>
+  <div class="io-label" id="io-seq" style="left:1158px;top:146px;color:var(--green)">Seq.<br>I/O</div>
+
+  <svg id="svg" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <filter id="glow"><feGaussianBlur stdDeviation="3" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+  </svg>
+
+  <div id="step-panel">
+    <div class="sp-query" id="sp-query"></div>
+    <div class="sp-step" id="sp-step"></div>
+    <div class="sp-label" id="sp-label">Press Play to begin</div>
+    <hr class="sp-sep">
+    <div class="sp-hdr">Parquet:</div>
+    <div class="sp-desc" id="sp-pq"></div>
+    <div class="sp-hdr" style="margin-top:8px">Lance:</div>
+    <div class="sp-desc" id="sp-ln"></div>
+  </div>
+</div>
+</div>
+
+<div class="controls">
+  <button id="btn-prev" title="Previous step (&#8592;)">&#9664; Prev</button>
+  <button id="btn-play">&#9208; Pause</button>
+  <button id="btn-next" title="Next step (&#8594;)">Next &#9654;</button>
+  <button id="btn-reset">&#8634; Reset</button>
+  <label>Speed: <span id="speed-val">1&times;</span>
+    <input type="range" id="speed" min="0.25" max="3" step="0.25" value="1">
+  </label>
+</div>
+
+<script>
+(function() {
+'use strict';
+
+// --- Config ---
+
+const PQ_X = 60, PQ_W = 320, LN_X = 820, LN_W = 320;
+const PQ_X_M = 40, PQ_W_M = 200, LN_X_M = 280, LN_W_M = 200, CANVAS_W_M = 500;
+let canvasMid = 600;
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+const C = {
+  A: 'rgba(139,233,253,0.85)', B: 'rgba(255,184,108,0.85)',
+  C: 'rgba(80,250,123,0.85)',  M: 'rgba(255,85,85,0.85)',
+  I: 'rgba(189,147,249,0.85)', H: 'rgba(98,114,164,0.85)',
+};
+const LIGHT_BG = new Set([C.A, C.B, C.C]);
+
+const PARQUET = [
+  { id: 'pq-hdr',  label: 'PAR1 Header (4 B)',            color: C.H, y: 29,  h: 19 },
+  { id: 'pq-r1a',  label: 'Col A Chunk (~8 MB)', color: C.A, y: 55,  h: 31 },
+  { id: 'pq-r1b',  label: 'Col B Chunk (~8 MB)', color: C.B, y: 88,  h: 31 },
+  { id: 'pq-r1c',  label: 'Col C Chunk (~8 MB)', color: C.C, y: 121, h: 31 },
+  { id: 'pq-r2a',  label: 'Col A Chunk (~8 MB)',         color: C.A, y: 160, h: 31 },
+  { id: 'pq-r2b',  label: 'Col B Chunk (~8 MB)',         color: C.B, y: 193, h: 31 },
+  { id: 'pq-r2c',  label: 'Col C Chunk (~8 MB)',         color: C.C, y: 226, h: 31 },
+  { id: 'pq-r3a',  label: 'Col A Chunk (~8 MB)',         color: C.A, y: 265, h: 31 },
+  { id: 'pq-r3b',  label: 'Col B Chunk (~8 MB)',         color: C.B, y: 298, h: 31 },
+  { id: 'pq-r3c',  label: 'Col C Chunk (~8 MB)',         color: C.C, y: 331, h: 31 },
+  { id: 'pq-pidx', label: 'Page Index (~20 KB)',         color: C.I, y: 371, h: 22 },
+  { id: 'pq-meta', label: 'File Metadata (~10 KB)',      color: C.M, y: 396, h: 22 },
+  { id: 'pq-mlen', label: 'Metadata Length (4 B)',        color: C.H, y: 422, h: 17 },
+  { id: 'pq-ftr',  label: 'PAR1 Footer (4 B)',           color: C.H, y: 443, h: 19 },
+];
+
+const LANCE = [
+  { id: 'ln-a1', label: 'Col A - Page 1 (~8 MB)', color: C.A, y: 29,  h: 31 },
+  { id: 'ln-a2', label: 'Col A - Page 2 (~8 MB)', color: C.A, y: 62,  h: 31 },
+  { id: 'ln-a3', label: 'Col A - Page 3 (~8 MB)', color: C.A, y: 95,  h: 31 },
+  { id: 'ln-b1', label: 'Col B - Page 1 (~8 MB)', color: C.B, y: 135, h: 31 },
+  { id: 'ln-b2', label: 'Col B - Page 2 (~8 MB)', color: C.B, y: 168, h: 31 },
+  { id: 'ln-b3', label: 'Col B - Page 3 (~8 MB)', color: C.B, y: 201, h: 31 },
+  { id: 'ln-c1', label: 'Col C - Page 1 (~8 MB)', color: C.C, y: 241, h: 31 },
+  { id: 'ln-c2', label: 'Col C - Page 2 (~8 MB)', color: C.C, y: 274, h: 31 },
+  { id: 'ln-c3', label: 'Col C - Page 3 (~8 MB)', color: C.C, y: 307, h: 31 },
+  { id: 'ln-cm', label: 'Column Metadata (~4 KB)', color: C.M, y: 347, h: 22 },
+  { id: 'ln-ot', label: 'Offset Tables (~200 B)',  color: C.I, y: 373, h: 22 },
+  { id: 'ln-ft', label: 'Footer (40 B)',            color: C.H, y: 398, h: 19 },
+];
+
+const ROW_GROUPS = [
+  { label: 'RG 1', top: 55,  bottom: 152 },
+  { label: 'RG 2', top: 160, bottom: 257 },
+  { label: 'RG 3', top: 265, bottom: 362 },
+];
+
+const QUERIES = {
+  random: {
+    sql: 'SELECT col_b WHERE id = 100',
+    steps: [
+      { label: 'Read Footer', dur: 1500,
+        pq: { desc: 'Start at the end. Read 8 bytes: a 4-byte metadata length + the PAR1 magic number. The length tells us where the metadata starts.', read: ['pq-ftr', 'pq-mlen'] },
+        ln: { desc: 'Read the last 40 bytes: metadata offsets, column count, version info, and the LANC magic. Column count tells us the offset table size, so we know exactly how much to read next.', read: ['ln-ft'] } },
+      { label: 'Read Metadata', dur: 1800,
+        pq: { desc: 'Fetch the Thrift-encoded file metadata (TCompactProtocol). It is one blob including: schema, row group boundaries, and column chunk offsets for every column (even though we only need Col B).', read: ['pq-meta'],
+              skip: ['pq-hdr','pq-r1a','pq-r1b','pq-r1c','pq-r2a','pq-r2b','pq-r2c','pq-r3a','pq-r3b','pq-r3c','pq-pidx'] },
+        ln: { desc: 'Read the offset table, then just Col B\'s column metadata (protobuf). Lance stores metadata per-column, so we skip everything we don\'t need.', read: ['ln-ot', 'ln-cm'],
+              skip: ['ln-a1','ln-a2','ln-a3','ln-b1','ln-b2','ln-b3','ln-c1','ln-c2','ln-c3'] } },
+      { label: 'Locate Target', dur: 1800,
+        pq: { desc: 'Read the page index (optional in Parquet). It has row counts and byte offsets for each page, so we can figure out which page in RG1 contains row 100. If the page index doesn\'t exist, we simply search the row in all pages.', read: ['pq-pidx'],
+              skip: ['pq-hdr','pq-r1a','pq-r1b','pq-r1c','pq-r2a','pq-r2b','pq-r2c','pq-r3a','pq-r3b','pq-r3c'] },
+        ln: { desc: 'Each page stores its row count in the metadata we already have. Simple math tells us row 100 is in page 1. No extra I/O.',
+              skip: ['ln-a1','ln-a2','ln-a3','ln-b1','ln-b2','ln-b3','ln-c1','ln-c2','ln-c3'] } },
+      { label: 'Read Target Data', dur: 2200,
+        pq: { desc: 'Page index told us which page has row 100. Seek into Col B\'s chunk and read that one page (~1 MB).', read: ['pq-r1b'],
+              slice: [0.51, 0.75],
+              skip: ['pq-hdr','pq-r1a','pq-r1c','pq-r2a','pq-r2b','pq-r2c','pq-r3a','pq-r3b','pq-r3c'],
+              seek: { from: 'pq-pidx', to: 'pq-r1b' } },
+        ln: { desc: 'Seek to Col B page 1. Metadata includes encoding info per page, so the reader can compute the exact byte range for row 100, and is just a ~64 KB read.', read: ['ln-b1'],
+              slice: [0.34, 0.37],
+              skip: ['ln-a1','ln-a2','ln-a3','ln-b2','ln-b3','ln-c1','ln-c2','ln-c3','ln-ot'],
+              seek: { from: 'ln-cm', to: 'ln-b1', color: '#00e676' } } },
+      { label: 'Decompressing Page...', dur: 2000, fadeArrows: true,
+        pq: { desc: 'Each page is compressed, and must be decompressed as one unit. A page includes: nullability flags, nesting info, and all values are packed together. No way to jump to row 100 directly.', read: ['pq-r1b'], slice: [0.51, 0.75] },
+        ln: { desc: 'Lance decodes too, but only the small slice it read (~64 KB). No need to decompress an entire page worth of data.' } },
+      { label: 'Decode & Filter', dur: 1800,
+        pq: { desc: 'We know the row offset within the page, but still have to decode from the start of the page to get there. Entire page processed for one row.' },
+        ln: { desc: 'Lance already decoded its small slice. Parquet is still working through a full page.' } },
+    ],
+  },
+  scan: {
+    sql: 'SELECT COUNT(*) GROUP BY col_b',
+    steps: [
+      { label: 'Read Footer', dur: 1500,
+        pq: { desc: 'Start at the end. Read 8 bytes: a 4-byte metadata length + the PAR1 magic number. The length tells us where the metadata starts.', read: ['pq-ftr', 'pq-mlen'] },
+        ln: { desc: 'Read the last 40 bytes: metadata offsets, column count, version info, and the LANC magic. Column count tells us the offset table size, so we know exactly how much to read next.', read: ['ln-ft'] } },
+      { label: 'Read Metadata', dur: 1800,
+        pq: { desc: 'Fetch the Thrift-encoded file metadata. We have to parse the whole thing just to find Col B\'s chunk offsets.', read: ['pq-meta'],
+              skip: ['pq-hdr','pq-r1a','pq-r1b','pq-r1c','pq-r2a','pq-r2b','pq-r2c','pq-r3a','pq-r3b','pq-r3c','pq-pidx'] },
+        ln: { desc: 'Read only Col B\'s column metadata (protobuf): page offsets, buffer sizes, and encodings for all 3 pages.', read: ['ln-cm'],
+              skip: ['ln-a1','ln-a2','ln-a3','ln-b1','ln-b2','ln-b3','ln-c1','ln-c2','ln-c3','ln-ot'] } },
+      { label: 'Read Col B (1/3)', dur: 2000,
+        pq: { desc: 'Seek to RG1 and read Col B\'s chunk. In Parquet, different columns live together inside each row group: Col A, Col B, Col C, etc...', read: ['pq-r1b'],
+              skip: ['pq-hdr','pq-r1a','pq-r1c','pq-r2a','pq-r2b','pq-r2c','pq-r3a','pq-r3b','pq-r3c','pq-pidx'],
+              seek: { from: 'pq-meta', to: 'pq-r1b', color: '#bd93f9' } },
+        ln: { desc: 'Start reading Col B page 1. In Lance, all pages for a column sit together.', read: ['ln-b1'],
+              skip: ['ln-a1','ln-a2','ln-a3','ln-b2','ln-b3','ln-c1','ln-c2','ln-c3','ln-ot'],
+              seek: { from: 'ln-cm', to: 'ln-b1', color: '#bd93f9' } } },
+      { label: 'Read Col B (2/3)', dur: 2000,
+        pq: { desc: 'Seek forward, skipping over Col C (RG1) and Col A (RG2) to reach the next Col B chunk.', read: ['pq-r2b'],
+              skip: ['pq-hdr','pq-r1a','pq-r1c','pq-r2a','pq-r2c','pq-r3a','pq-r3b','pq-r3c','pq-pidx'],
+              seek: { from: 'pq-r1b', to: 'pq-r2b', color: '#bd93f9' } },
+        ln: { desc: 'Keep reading.', read: ['ln-b2'],
+              skip: ['ln-a1','ln-a2','ln-a3','ln-b3','ln-c1','ln-c2','ln-c3','ln-ot'],
+              seek: { from: 'ln-b1', to: 'ln-b2', color: '#bd93f9' } } },
+      { label: 'Read Col B (3/3)', dur: 2000,
+        pq: { desc: 'Another seek, skipping Col C (RG2) and Col A (RG3).', read: ['pq-r3b'],
+              skip: ['pq-hdr','pq-r1a','pq-r1c','pq-r2a','pq-r2c','pq-r3a','pq-r3c','pq-pidx'],
+              seek: { from: 'pq-r2b', to: 'pq-r3b', color: '#bd93f9' } },
+        ln: { desc: 'Read page 3.', read: ['ln-b3'],
+              skip: ['ln-a1','ln-a2','ln-a3','ln-c1','ln-c2','ln-c3','ln-ot'],
+              seek: { from: 'ln-b2', to: 'ln-b3', color: '#bd93f9' } } },
+      { label: 'Completing Scan...', dur: 1800, fadeArrows: true,
+        pq: { desc: 'Done. Performace is roughly similar, as it\'s recommended to fetch chunks in parallel after some threshold (e.g. 8MB) on object storages. It doesn\t matter if the chunks are sequential or not.' },
+        ln: { desc: 'Done.' } },
+    ],
+  },
+};
+
+// --- State & DOM ---
+
+const state = { query: 'random', phase: 'idle', step: -1, elapsed: 0, speed: 1, lastTs: 0 };
+const $ = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+
+const canvas = $('#canvas');
+const svgEl = $('#svg');
+const panel = {
+  query: $('#sp-query'), step: $('#sp-step'), label: $('#sp-label'),
+  pq: $('#sp-pq'), ln: $('#sp-ln'),
+  sumPq: $('#sum-pq'), sumLn: $('#sum-ln'), sumNote: $('#sum-note'),
+};
+const ioLabel = { random: $('#io-random'), seq: $('#io-seq') };
+const btn = { play: $('#btn-play'), reset: $('#btn-reset'), prev: $('#btn-prev'), next: $('#btn-next') };
+
+// --- Blocks ---
+
+const blocks = {};
+const svgDyn = [];
+
+function createBlock(def, x, w) {
+  const el = document.createElement('div');
+  el.className = 'block';
+  Object.assign(el.style, {
+    left: x + 'px', top: def.y + 'px', width: w + 'px', height: def.h + 'px',
+    background: def.color, fontSize: (def.h < 30 ? 11 : 12) + 'px',
+    color: LIGHT_BG.has(def.color) ? 'rgba(0,0,0,0.95)' : 'rgba(255,255,255,0.95)',
+  });
+  el.textContent = def.label;
+  canvas.appendChild(el);
+  blocks[def.id] = { el, x, y: def.y, w, h: def.h };
+}
+
+function createBrackets() {
+  ROW_GROUPS.forEach(rg => {
+    const bracket = document.createElement('div');
+    bracket.className = 'rg-bracket';
+    Object.assign(bracket.style, {
+      left: (PQ_X - 12) + 'px', top: rg.top + 'px', height: (rg.bottom - rg.top) + 'px',
+    });
+    canvas.appendChild(bracket);
+
+    const label = document.createElement('div');
+    label.className = 'rg-label';
+    Object.assign(label.style, {
+      left: (PQ_X - 24) + 'px', top: ((rg.top + rg.bottom) / 2) + 'px',
+    });
+    label.textContent = rg.label;
+    canvas.appendChild(label);
+  });
+}
+
+function addDividers(ids, segments) {
+  ids.forEach(id => {
+    const b = blocks[id];
+    for (let i = 1; i < segments; i++) {
+      const d = document.createElement('div');
+      d.className = 'block-divider';
+      d.style.left = ((i / segments) * 100) + '%';
+      b.el.appendChild(d);
+    }
+  });
+}
+
+// --- Block State ---
+
+function applySliceMasks(b, slice) {
+  const mL = document.createElement('div');
+  mL.className = 'partial-mask';
+  Object.assign(mL.style, { left: '-2px', right: 'auto', width: (slice[0] * 100) + '%', borderRadius: '5px 0 0 5px' });
+  b.el.appendChild(mL);
+
+  const mR = document.createElement('div');
+  mR.className = 'partial-mask';
+  mR.style.left = (slice[1] * 100) + '%';
+  b.el.appendChild(mR);
+}
+
+function setBlockState(id, newState, slice) {
+  const b = blocks[id];
+  if (!b) return;
+
+  if (newState === 'skipped') {
+    if (!b.el.classList.contains('reading') && !b.el.classList.contains('completed')) {
+      b.el.classList.add('skipped');
+    }
+    return;
+  }
+
+  const stayingSame = (newState === 'reading' && b.el.classList.contains('reading'))
+                   || (newState === 'completed' && b.el.classList.contains('completed'));
+
+  b.el.querySelectorAll('.partial-mask').forEach(m => m.remove());
+
+  if (slice) b.slice = slice;
+  if (newState === 'idle') b.slice = null;
+
+  if (!stayingSame) b.el.classList.remove('reading', 'completed', 'skipped');
+
+  if (newState === 'reading') {
+    if (!stayingSame) b.el.classList.add('reading');
+    if (slice) applySliceMasks(b, slice);
+  } else if (newState === 'completed') {
+    if (!stayingSame) b.el.classList.add('completed');
+    if (b.slice) applySliceMasks(b, b.slice);
+  }
+}
+
+function resetAllBlocks() {
+  Object.keys(blocks).forEach(id => setBlockState(id, 'idle'));
+}
+
+// --- SVG ---
+
+function svgCreate(tag, attrs) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+}
+
+function clearSvg() {
+  svgDyn.forEach(el => el.remove());
+  svgDyn.length = 0;
+}
+
+function fadePreviousArrows() {
+  svgDyn.forEach(el => {
+    if (el.classList.contains('arrow-path') || el.classList.contains('arrow-head')) {
+      el.style.opacity = '';
+      el.style.transition = '';
+      el.classList.add('faded');
+    }
+  });
+}
+
+function addArrow(fromId, toId, color, animate) {
+  const fb = blocks[fromId], tb = blocks[toId];
+  const isLeft = fb.x < canvasMid;
+  const x1 = isLeft ? fb.x + fb.w : fb.x, y1 = fb.y + fb.h / 2;
+  const x2 = isLeft ? tb.x + tb.w : tb.x, y2 = tb.y + tb.h / 2;
+  const cpx = isLeft ? Math.max(x1, x2) + 30 : Math.min(x1, x2) - 30;
+  const cpy1 = y1 + (y2 - y1) * 0.3, cpy2 = y1 + (y2 - y1) * 0.7;
+
+  const path = svgCreate('path', {
+    d: `M${x1} ${y1} C${cpx} ${cpy1},${cpx} ${cpy2},${x2} ${y2}`,
+    stroke: color, 'stroke-width': '2.5', 'stroke-linecap': 'round', fill: 'none',
+  });
+  path.classList.add('arrow-path');
+  svgEl.appendChild(path);
+
+  const ang = Math.atan2(y2 - cpy2, x2 - cpx), s = 10;
+  const pts = [
+    x2, y2,
+    x2 - s * Math.cos(ang - 0.4), y2 - s * Math.sin(ang - 0.4),
+    x2 - s * Math.cos(ang + 0.4), y2 - s * Math.sin(ang + 0.4),
+  ].join(',');
+  const head = svgCreate('polygon', { points: pts, fill: color });
+  head.classList.add('arrow-head');
+  svgEl.appendChild(head);
+  svgDyn.push(path, head);
+
+  if (animate !== false) {
+    const len = path.getTotalLength();
+    path.style.strokeDasharray = len;
+    path.style.strokeDashoffset = len;
+    head.style.opacity = '0';
+    path.getBoundingClientRect();
+    path.style.transition = 'stroke-dashoffset 700ms ease-out';
+    path.style.strokeDashoffset = '0';
+    setTimeout(() => {
+      if (head.classList.contains('faded')) return;
+      head.style.transition = 'opacity 200ms ease-in';
+      head.style.opacity = '1';
+    }, 520);
+  }
+}
+
+// --- Scan Line ---
+
+let scanLine = null, scanDot = null, scanBaseY = 0;
+
+function createScanLine(startBlockId) {
+  const startB = blocks[startBlockId], endB = blocks['ln-b3'];
+  scanBaseY = startB.y;
+  const x = startB.x + startB.w + 14;
+
+  scanLine = svgCreate('path', {
+    d: `M${x} ${scanBaseY} L${x} ${endB.y + endB.h}`,
+    stroke: '#00e676', 'stroke-width': '3', 'stroke-linecap': 'round',
+    fill: 'none', filter: 'url(#glow)',
+  });
+  svgEl.appendChild(scanLine);
+  const len = scanLine.getTotalLength();
+  scanLine.style.strokeDasharray = len;
+  scanLine.style.strokeDashoffset = len;
+
+  scanDot = svgCreate('circle', { cx: x, cy: scanBaseY, r: '5', fill: '#00e676', filter: 'url(#glow)' });
+  svgEl.appendChild(scanDot);
+  svgDyn.push(scanLine, scanDot);
+  scanLine.getBoundingClientRect();
+}
+
+function extendScanTo(blockId, animate) {
+  if (!scanLine) return;
+  const b = blocks[blockId];
+  const dist = (b.y + b.h) - scanBaseY;
+  if (animate !== false) {
+    scanLine.style.transition = 'stroke-dashoffset 0.85s ease-out';
+    scanDot.style.transition = 'transform 0.85s ease-out';
+  } else {
+    scanLine.style.transition = 'none';
+    scanDot.style.transition = 'none';
+  }
+  scanLine.style.strokeDashoffset = scanLine.getTotalLength() - dist;
+  scanDot.style.transform = `translateY(${dist}px)`;
+}
+
+// --- Animation Engine ---
+
+function getQuery() { return QUERIES[state.query]; }
+
+function stepHasNewArrows(step) {
+  return step.fadeArrows || (step.pq && step.pq.seek) || (step.ln && step.ln.seek);
+}
+
+function resetVisuals() {
+  resetAllBlocks();
+  clearSvg();
+  scanLine = null;
+  scanDot = null;
+  ioLabel.random.classList.remove('visible');
+  ioLabel.seq.classList.remove('visible');
+}
+
+function reset() {
+  Object.assign(state, { phase: 'idle', step: -1, elapsed: 0, lastTs: 0 });
+  resetVisuals();
+  panel.query.textContent = '';
+  panel.step.textContent = '';
+  panel.label.textContent = 'Press Play to begin';
+  panel.pq.textContent = '';
+  panel.ln.textContent = '';
+  updateControls();
+}
+
+function updatePanel(idx) {
+  const q = getQuery(), step = q.steps[idx];
+  panel.query.textContent = q.sql;
+  panel.step.textContent = `Step ${idx + 1} / ${q.steps.length}`;
+  panel.label.textContent = step.label;
+  panel.pq.textContent = step.pq.desc;
+  panel.ln.textContent = step.ln.desc;
+}
+
+function applyStepEffects(idx, animate) {
+  const step = getQuery().steps[idx];
+  ['pq', 'ln'].forEach(side => {
+    const sd = step[side];
+    if (sd.skip) sd.skip.forEach(id => setBlockState(id, 'skipped'));
+    if (sd.read) sd.read.forEach(id => setBlockState(id, 'reading', sd.slice || null));
+    if (sd.seek) addArrow(sd.seek.from, sd.seek.to, sd.seek.color || (sd.seek.seq ? '#00e676' : '#ff4444'), animate);
+    if (sd.scanStart) {
+      createScanLine(sd.read[0]);
+      extendScanTo(sd.read[0], animate);
+      ioLabel.seq.classList.add('visible');
+    }
+    if (sd.scanCont) extendScanTo(sd.read[0], animate);
+  });
+}
+
+function markStepCompleted(idx) {
+  const step = getQuery().steps[idx];
+  ['pq', 'ln'].forEach(side => {
+    if (step[side].read) step[side].read.forEach(id => setBlockState(id, 'completed'));
+  });
+}
+
+function beginStep(idx) {
+  const q = getQuery();
+  if (idx >= q.steps.length) {
+    if (idx > 0) markStepCompleted(idx - 1);
+    state.phase = 'finished';
+    updateControls();
+    return;
+  }
+
+  const step = q.steps[idx];
+  if (idx > 0) {
+    const continuing = new Set([...(step.pq.read || []), ...(step.ln.read || [])]);
+    const prev = q.steps[idx - 1];
+    ['pq', 'ln'].forEach(side => {
+      if (prev[side].read) prev[side].read.forEach(id => {
+        if (!continuing.has(id)) setBlockState(id, 'completed');
+      });
+    });
+  }
+
+  if (stepHasNewArrows(step)) fadePreviousArrows();
+  state.step = idx;
+  state.elapsed = 0;
+  updatePanel(idx);
+  applyStepEffects(idx, true);
+}
+
+function jumpToStep(targetIdx) {
+  const q = getQuery();
+  if (targetIdx < 0 || targetIdx >= q.steps.length) return;
+
+  canvas.classList.add('no-transitions');
+  resetVisuals();
+
+  for (let i = 0; i < targetIdx; i++) {
+    applyStepEffects(i, false);
+    markStepCompleted(i);
+    const next = q.steps[i + 1];
+    if (next && stepHasNewArrows(next)) fadePreviousArrows();
+  }
+
+  canvas.classList.remove('no-transitions');
+  document.body.offsetHeight;
+
+  state.step = targetIdx;
+  state.elapsed = 0;
+  updatePanel(targetIdx);
+  applyStepEffects(targetIdx, true);
+  state.phase = 'paused';
+  updateControls();
+}
+
+function tick(ts) {
+  if (state.phase === 'playing') {
+    if (!state.lastTs) state.lastTs = ts;
+    state.elapsed += Math.min(ts - state.lastTs, 200) * state.speed;
+    state.lastTs = ts;
+    const q = getQuery();
+    if (state.step >= 0 && state.step < q.steps.length && state.elapsed >= q.steps[state.step].dur) {
+      beginStep(state.step + 1);
+    }
+  } else {
+    state.lastTs = 0;
+  }
+  requestAnimationFrame(tick);
+}
+
+// --- Controls ---
+
+function updateControls() {
+  btn.play.disabled = (state.phase === 'finished');
+  btn.play.textContent = state.phase === 'playing' ? '\u23F8 Pause'
+    : state.phase === 'paused' ? '\u25B6 Resume' : '\u25B6 Play';
+  btn.prev.disabled = (state.phase === 'idle') || (state.step <= 0 && state.phase !== 'finished');
+  btn.next.disabled = (state.phase === 'finished') || (state.phase !== 'idle' && state.step >= getQuery().steps.length - 1);
+}
+
+$$('.query-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    $$('.query-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    state.query = tab.dataset.query;
+    reset();
+    jumpToStep(0);
+  });
+});
+
+btn.play.addEventListener('click', () => {
+  if (state.phase === 'playing') {
+    state.phase = 'paused';
+  } else if (state.phase === 'idle' || state.phase === 'finished') {
+    reset();
+    state.phase = 'playing';
+    beginStep(0);
+  } else {
+    state.phase = 'playing';
+  }
+  updateControls();
+});
+
+btn.reset.addEventListener('click', reset);
+
+btn.prev.addEventListener('click', () => {
+  if (state.phase === 'idle') return;
+  jumpToStep(state.phase === 'finished' ? getQuery().steps.length - 1 : state.step - 1);
+});
+
+btn.next.addEventListener('click', () => {
+  if (state.phase === 'idle') {
+    state.phase = 'paused';
+    beginStep(0);
+  } else if (state.step < getQuery().steps.length - 1) {
+    state.phase = 'paused';
+    beginStep(state.step + 1);
+  }
+  updateControls();
+});
+
+document.addEventListener('keydown', e => {
+  const actions = { ArrowLeft: btn.prev, ArrowRight: btn.next, ' ': btn.play };
+  if (actions[e.key]) { actions[e.key].click(); e.preventDefault(); }
+});
+
+$('#speed').addEventListener('input', function() {
+  state.speed = parseFloat(this.value);
+  $('#speed-val').textContent = state.speed + '\u00d7';
+});
+
+// --- Init ---
+
+PARQUET.forEach(def => createBlock(def, PQ_X, PQ_W));
+LANCE.forEach(def => createBlock(def, LN_X, LN_W));
+createBrackets();
+addDividers(['pq-r1a','pq-r1b','pq-r1c','pq-r2a','pq-r2b','pq-r2c','pq-r3a','pq-r3b','pq-r3c'], 4);
+addDividers(['ln-a1','ln-a2','ln-a3','ln-b1','ln-b2','ln-b3','ln-c1','ln-c2','ln-c3'], 30);
+requestAnimationFrame(tick);
+jumpToStep(0);
+
+const colTitleEls = Array.from(canvas.querySelectorAll('.col-title'));
+const noteEl = canvas.querySelector('.note');
+const bracketEls = Array.from(canvas.querySelectorAll('.rg-bracket'));
+const rgLabelEls = Array.from(canvas.querySelectorAll('.rg-label'));
+let currentMobile = null;
+
+function setLayout(mobile) {
+  if (mobile === currentMobile) return;
+  currentMobile = mobile;
+  const pqX = mobile ? PQ_X_M : PQ_X;
+  const pqW = mobile ? PQ_W_M : PQ_W;
+  const lnX = mobile ? LN_X_M : LN_X;
+  const lnW = mobile ? LN_W_M : LN_W;
+  canvasMid = mobile ? CANVAS_W_M / 2 : 600;
+  canvas.style.width = (mobile ? CANVAS_W_M : 1200) + 'px';
+  PARQUET.forEach(def => {
+    const b = blocks[def.id];
+    b.x = pqX; b.w = pqW;
+    b.el.style.left = pqX + 'px';
+    b.el.style.width = pqW + 'px';
+  });
+  LANCE.forEach(def => {
+    const b = blocks[def.id];
+    b.x = lnX; b.w = lnW;
+    b.el.style.left = lnX + 'px';
+    b.el.style.width = lnW + 'px';
+  });
+  colTitleEls[0].style.left = (pqX + pqW / 2) + 'px';
+  colTitleEls[1].style.left = (lnX + lnW / 2) + 'px';
+  noteEl.style.left = (lnX + lnW / 2) + 'px';
+  bracketEls.forEach(el => el.style.left = (pqX - 12) + 'px');
+  rgLabelEls.forEach(el => el.style.left = (pqX - 24) + 'px');
+  clearSvg();
+  scanLine = null;
+  scanDot = null;
+  if (state.step >= 0 && state.phase !== 'idle') {
+    const ph = state.phase;
+    jumpToStep(state.step);
+    if (ph === 'playing') { state.phase = 'playing'; updateControls(); }
+  }
+}
+
+const wrapper = $('#canvas-wrapper');
+const panelEl = $('#step-panel');
+const controlsEl = $('.controls');
+function scaleCanvas() {
+  const mobile = window.innerWidth <= 900;
+  setLayout(mobile);
+  const cw = mobile ? CANVAS_W_M : 1200;
+  const scale = wrapper.clientWidth / cw;
+  canvas.style.transform = `scale(${scale})`;
+  wrapper.style.height = (480 * scale) + 'px';
+  if (mobile && panelEl.parentElement === canvas) {
+    controlsEl.parentElement.insertBefore(panelEl, controlsEl);
+  } else if (!mobile && panelEl.parentElement !== canvas) {
+    canvas.appendChild(panelEl);
+  }
+}
+new ResizeObserver(scaleCanvas).observe(wrapper);
+scaleCanvas();
+if (window.frameElement) {
+  let lastH = 0;
+  new ResizeObserver(() => {
+    const h = document.body.scrollHeight;
+    if (h !== lastH) { lastH = h; window.frameElement.style.height = h + 'px'; }
+  }).observe(document.body);
+}
+
+})();
+</script>
+</body>
+</html>
