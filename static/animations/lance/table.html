@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lance Table Format: MVCC & Indexing</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #242630;
+  --surface: #44475a;
+  --text: #f8f8f2;
+  --muted: #8292c9;
+  --accent: #bd93f9;
+  --gold: #f1fa8c;
+  --green: #50fa7b;
+  --red: #ff5555;
+  --border: rgba(68, 71, 90, 0.5);
+  --mono: 'DejaVu Sans Mono', monospace;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'DejaVu Sans', sans-serif;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px;
+  gap: 8px;
+}
+
+/* ── Query Tabs ── */
+.query-tabs { display: flex; gap: 8px; }
+
+.query-tab {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  padding: 10px 20px; min-width: 280px;
+  background: var(--surface); border: 2px solid #333; border-radius: 8px;
+  color: var(--text); cursor: pointer; font-size: 16px; transition: all 0.15s;
+}
+.query-tab:hover { border-color: #555; background: #1e2d50; }
+.query-tab.active { border-color: var(--accent); background: #1e2d50; }
+.query-tab code { font-family: var(--mono); font-size: 12px; color: #888; }
+.query-tab.active code { color: #aaf; }
+
+/* ── Canvas ── */
+#canvas-wrapper { width: 100%; position: relative; }
+#canvas { position: relative; width: 1200px; height: 400px; transform-origin: top left; }
+
+.col-title {
+  position: absolute; top: 8px; font-size: 16px; font-weight: bold;
+  color: #ccc; pointer-events: none; font-family: var(--mono);
+}
+
+.section-label {
+  position: absolute; font-family: var(--mono); font-size: 12px;
+  color: rgba(255,255,255,0.35); pointer-events: none;
+}
+.tree-connector {
+  position: absolute; background: rgba(255,255,255,0.15); pointer-events: none;
+}
+
+/* ── Blocks ── */
+.block {
+  position: absolute; border-radius: 5px; display: flex; align-items: center;
+  padding: 0 10px; font-family: var(--mono); font-size: 12px;
+  border: 2px solid transparent;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3); overflow: hidden;
+  transition: opacity 0.4s, filter 0.4s, border-color 0.3s, box-shadow 0.3s, transform 0.3s;
+}
+.block.reading {
+  border-color: rgba(255,215,0,0.8);
+  box-shadow: 0 0 16px rgba(255,215,0,0.3), inset 0 0 25px rgba(255,215,0,0.08);
+  animation: pulse 0.9s ease-in-out infinite; z-index: 3;
+}
+.block.reading-alt {
+  border-color: rgba(80,250,123,0.8);
+  box-shadow: 0 0 16px rgba(80,250,123,0.3), inset 0 0 25px rgba(80,250,123,0.08);
+  animation: pulse 0.9s ease-in-out infinite; z-index: 3;
+}
+.block.completed {
+  border-color: rgba(0,200,83,0.5);
+  box-shadow: 0 0 10px rgba(0,200,83,0.15); z-index: 1;
+}
+.block.skipped { opacity: 0.28; filter: saturate(0.15) brightness(0.5); }
+.block.unrevealed { opacity: 0; transform: scale(0.92); pointer-events: none; }
+@keyframes pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.02); } }
+
+.block-divider {
+  position: absolute; top: 3px; bottom: 3px; width: 1px;
+  background: rgba(255,255,255,0.15); pointer-events: none;
+}
+
+/* ── Deletion marker ── */
+.del-stripe {
+  position: absolute; top: 3px; bottom: 3px; left: 3px; width: 4px;
+  background: repeating-linear-gradient(45deg, transparent, transparent 2px, rgba(255,85,85,0.4) 2px, rgba(255,85,85,0.4) 4px);
+  border-radius: 2px; pointer-events: none;
+}
+
+/* ── Step Panel ── */
+#step-panel {
+  position: absolute; top: 28px;
+  background: rgba(22,33,62,0.95); border: 1px solid var(--border);
+  border-radius: 10px; padding: 14px 16px; z-index: 10;
+}
+.sp-query { font-size: 12px; color: var(--muted); text-align: center; font-family: var(--mono); margin-bottom: 6px; min-height: 14px; }
+.sp-step { font-size: 16px; font-weight: bold; color: #fff; text-align: center; margin-bottom: 2px; min-height: 20px; }
+.sp-label { font-size: 14px; color: var(--gold); text-align: center; margin-bottom: 8px; min-height: 18px; }
+.sp-sep { border: none; border-top: 1px solid rgba(68,68,119,0.3); margin: 8px 0; }
+.sp-desc { font-family: var(--mono); font-size: 12px; color: #ccc; min-height: 26px; line-height: 1.45; }
+.sp-insight { font-family: var(--mono); font-size: 11px; color: var(--green); font-style: italic; margin-top: 8px; line-height: 1.4; min-height: 14px; }
+.sp-insight a { color: var(--green); text-decoration: underline; }
+
+/* ── SVG ── */
+#svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; }
+.arrow-path { fill: none; stroke-width: 2.5; stroke-linecap: round; }
+.arrow-path.faded, .arrow-head.faded { opacity: 0.18; transition: opacity 0.4s; }
+.no-transitions, .no-transitions * { transition: none !important; }
+
+/* ── Controls ── */
+.controls {
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 24px; border-radius: 8px;
+  margin-top: -30px;
+}
+.controls button {
+  background: #2a2a4a; color: var(--text); border: 1px solid #444;
+  padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px;
+  transition: all 0.15s; user-select: none;
+}
+#btn-play { min-width: 100px; height: 35px; }
+.controls button:hover:not(:disabled) { background: #3a3a5a; border-color: #666; }
+.controls button:disabled { opacity: 0.4; cursor: default; }
+#speed { width: 100px; accent-color: var(--accent); }
+.controls label { font-size: 14px; color: #aaa; display: flex; align-items: center; gap: 6px; }
+#speed-val { display: inline-block; width: 36px; text-align: right; }
+
+/* ── Responsive ── */
+@media (max-width: 900px) {
+  .query-tabs { flex-wrap: wrap; gap: 4px; }
+  .query-tab { min-width: 0; flex: 1 1 100%; padding: 8px 12px; font-size: 14px; }
+  .query-tab code { font-size: 10px; }
+  #step-panel { position: static !important; width: auto !important; left: auto !important; top: auto !important; margin: 0; }
+  .controls { flex-wrap: wrap; gap: 8px; padding: 8px 12px; justify-content: center; margin-top: 0; }
+  .controls button { padding: 6px 10px; font-size: 13px; }
+  #btn-play { min-width: 80px; height: 32px; }
+  #speed { width: 80px; }
+  .controls label { font-size: 13px; }
+  .label-hint { display: none; }
+}
+</style>
+</head>
+<body>
+
+<div class="query-tabs">
+  <button class="query-tab active" data-query="mvcc">
+    <strong>MVCC: Versioned Writes</strong>
+    <code>INSERT / DELETE / UPDATE + concurrent readers</code>
+  </button>
+  <button class="query-tab" data-query="writers">
+    <strong>MVCC: Concurrent Writers</strong>
+    <code>Two writers commit concurrently</code>
+  </button>
+  <button class="query-tab" data-query="btree">
+    <strong>BTree Index Lookup</strong>
+    <code>SELECT * WHERE price = 42.50</code>
+  </button>
+</div>
+
+<div id="canvas-wrapper">
+<div id="canvas">
+  <svg id="svg" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <filter id="glow"><feGaussianBlur stdDeviation="3" result="b"/>
+        <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+      </filter>
+    </defs>
+  </svg>
+
+  <div id="step-panel">
+    <div class="sp-query" id="sp-query"></div>
+    <div class="sp-step" id="sp-step"></div>
+    <div class="sp-label" id="sp-label">Press Play to begin</div>
+    <hr class="sp-sep">
+    <div class="sp-desc" id="sp-desc"></div>
+    <div class="sp-insight" id="sp-insight"></div>
+  </div>
+</div>
+</div>
+
+<div class="controls">
+  <button id="btn-prev" title="Previous step (&#8592;)">&#9664; Prev</button>
+  <button id="btn-play">&#9208; Pause</button>
+  <button id="btn-next" title="Next step (&#8594;)">Next &#9654;</button>
+  <button id="btn-reset">&#8634; Reset</button>
+  <label>Speed: <span id="speed-val">1&times;</span>
+    <input type="range" id="speed" min="0.25" max="3" step="0.25" value="1">
+  </label>
+</div>
+
+<script>
+(function() {
+'use strict';
+
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+const C = {
+  A: 'rgba(139,233,253,0.85)', B: 'rgba(255,184,108,0.85)',
+  G: 'rgba(80,250,123,0.85)',  M: 'rgba(255,85,85,0.85)',
+  V: 'rgba(189,147,249,0.85)', H: 'rgba(98,114,164,0.85)',
+  T: 'rgba(241,250,140,0.85)',
+};
+const LIGHT_BG = new Set([C.A, C.B, C.G, C.T]);
+
+// ── Shared Layout ──
+const L_X = 40;   // left column x
+const R_X = 440;  // right column x
+const L_X_M = 20, R_X_M = 250, CANVAS_W_M = 430;
+const W_MAP_M = { 260: 160, 290: 180, 220: 140 };
+let arrowMid = (L_X + R_X) / 2;
+
+// ── MVCC Layout ──
+const MF_W = 260;
+const DT_W = 220;
+
+const MVCC_DEFS = [
+  { id: 'v1-mf', label: '1.manifest (V1)', color: C.V, x: L_X, w: MF_W, y: 44,  h: 30 },
+  { id: 'v2-mf', label: '2.manifest (V2)', color: C.V, x: L_X, w: MF_W, y: 78,  h: 30, startHidden: true },
+  { id: 'v3-mf', label: '3.manifest (V3)', color: C.V, x: L_X, w: MF_W, y: 112, h: 30, startHidden: true },
+  { id: 'v4-mf', label: '4.manifest (V4)', color: C.V, x: L_X, w: MF_W, y: 146, h: 30, startHidden: true },
+  { id: 'v5-mf', label: '5.manifest (V5)', color: C.V, x: L_X, w: MF_W, y: 180, h: 30, startHidden: true },
+  { id: 'f1', label: 'Fragment 1 - 500 rows', color: C.A, x: R_X, w: DT_W, y: 44,  h: 32 },
+  { id: 'f1-sub', label: 'data-1.lance', color: C.A, x: R_X, w: DT_W, y: 78,  h: 24, startHidden: true },
+  { id: 'f2', label: 'Fragment 2 - 200 rows', color: C.B, x: R_X, w: DT_W, y: 106, h: 32, startHidden: true },
+  { id: 'f3', label: 'Fragment 3 - 50 rows',  color: C.G, x: R_X, w: DT_W, y: 142, h: 32, startHidden: true },
+  { id: 'f4-compact', label: 'Fragment 4 - 650 rows (compacted)', color: C.T, x: R_X, w: DT_W, y: 178, h: 34, startHidden: true },
+  { id: 'del1', label: '1-3-0.bin - 50 rows', color: C.M, x: R_X, w: DT_W, y: 256, h: 26, startHidden: true },
+  { id: 'del1-v4', label: '1-4-0.bin - 100 rows', color: C.M, x: R_X, w: DT_W, y: 286, h: 26, startHidden: true },
+];
+
+const MVCC_LABELS = [
+  { text: '_versions/', x: L_X, y: 18, group: 'mvcc' },
+  { text: 'data/', x: R_X, y: 18, group: 'mvcc' },
+  { text: '_deletions/', x: R_X, y: 230, group: 'mvcc' },
+];
+
+// ── BTree Layout ──
+const IX_W = 290;
+const DF_W = 220;
+
+const BTREE_DEFS = [
+  { id: 'pl-0', label: 'min=1.00   max=15.99 -> pg 0', color: C.V, x: L_X, w: IX_W, y: 66,  h: 24 },
+  { id: 'pl-1', label: 'min=16.00  max=32.49 -> pg 1', color: C.V, x: L_X, w: IX_W, y: 92,  h: 24 },
+  { id: 'pl-2', label: 'min=32.50 max=48.99 -> pg 2', color: C.V, x: L_X, w: IX_W, y: 118, h: 24 },
+  { id: 'pl-3', label: 'min=49.00  max=75.00 -> pg 3', color: C.V, x: L_X, w: IX_W, y: 144, h: 24 },
+  { id: 'pd-0', label: 'Pg 0: [1.00, 2.50, ...] -> IDs',           color: C.G, x: L_X, w: IX_W, y: 210, h: 24 },
+  { id: 'pd-1', label: 'Pg 1: [16.00, 17.25, ...] -> IDs',         color: C.G, x: L_X, w: IX_W, y: 236, h: 24 },
+  { id: 'pd-2', label: 'Pg 2: [32.50, 35.75, 42.50, ...] -> IDs',  color: C.G, x: L_X, w: IX_W, y: 262, h: 24 },
+  { id: 'pd-3', label: 'Pg 3: [49.00, 52.25, ...] -> IDs',         color: C.G, x: L_X, w: IX_W, y: 288, h: 24 },
+  { id: 'dt-price', label: 'col_price.lance',    color: C.B, x: R_X, w: DF_W, y: 66,  h: 26 },
+  { id: 'dt-name',  label: 'col_name.lance',     color: C.A, x: R_X, w: DF_W, y: 94,  h: 26 },
+  { id: 'dt-cat',   label: 'col_category.lance', color: C.G, x: R_X, w: DF_W, y: 122, h: 26 },
+];
+
+const BTREE_LABELS = [
+  { text: 'page_lookup.lance', x: L_X, y: 42, group: 'btree', sub: '(upper BTree - cached in memory)' },
+  { text: 'page_data.lance', x: L_X, y: 186, group: 'btree', sub: '(leaf pages - sorted values + row IDs)' },
+  { text: 'Fragment 3', x: R_X, y: 42, group: 'btree' },
+  { text: '_indices/{uuid}/', x: L_X - 16, y: 14, group: 'btree' },
+];
+
+// ── Writers Layout ──
+const WM_W = 260;
+const WD_W = 220;
+
+const WRITERS_DEFS = [
+  { id: 'w-v4',      label: '4.manifest (V4)',        color: C.V, x: L_X, w: WM_W, y: 44,  h: 30 },
+  { id: 'w-v5',      label: '5.manifest (V5)',        color: C.V, x: L_X, w: WM_W, y: 82,  h: 30, startHidden: true },
+  { id: 'w-v5-fail', label: '5.manifest (FAILED)',    color: C.M, x: L_X, w: WM_W, y: 120, h: 30, startHidden: true },
+  { id: 'w-v6',      label: '6.manifest (V6-rebased)',color: C.V, x: L_X, w: WM_W, y: 158, h: 30, startHidden: true },
+  { id: 'w-txn-a',   label: '4-{uuid-a}.txn',        color: C.T, x: L_X, w: WM_W, y: 256, h: 28, startHidden: true },
+  { id: 'w-f1',      label: 'Fragments 1-4 (existing)',color: C.H, x: R_X, w: WD_W, y: 44,  h: 32 },
+  { id: 'w-f-a',     label: 'Fragment 5 (Writer A)',  color: C.B, x: R_X, w: WD_W, y: 86,  h: 32, startHidden: true },
+  { id: 'w-f-b',     label: 'Fragment 6 (Writer B)',  color: C.G, x: R_X, w: WD_W, y: 128, h: 32, startHidden: true },
+];
+
+const WRITERS_LABELS = [
+  { text: '_versions/', x: L_X, y: 18, group: 'writers' },
+  { text: 'data/', x: R_X, y: 18, group: 'writers' },
+  { text: '_transactions/', x: L_X, y: 230, group: 'writers' },
+];
+
+// ── Steps ──
+const QUERIES = {
+  mvcc: {
+    sql: 'Lance Table: Multi-Version Concurrency Control',
+    steps: [
+      { label: 'Initial Table (V1)', dur: 2000,
+        desc: 'We start at version 1. The 1.manifest file holds the full schema and points to a single fragment with 500 rows. Each fragment keeps its columns as separate .lance files on disk under data/. A neat trick: manifest filenames are reverse-sorted lexicographically, so the latest version always shows up first when listing files on an object store.',
+        insight: 'All files are immutable, as expected from a table format designed for object storages.',
+        read: ['v1-mf', 'f1'],
+        arrows: [{ from: 'v1-mf', to: 'f1', color: '#bd93f9' }],
+      },
+      { label: 'INSERT 200 Rows -> V2', dur: 2200,
+        desc: 'We insert 200 rows. The new rows land in Fragment 2 a new set of .lance files. Then a new 2.manifest is created that lists both fragments. Fragment 1 is simply shared by reference, not copied. The old 1.manifest stays exactly as it was.',
+        reveal: ['v2-mf', 'f2'],
+        read: ['v2-mf', 'f2'],
+        completed: ['v1-mf', 'f1'],
+        arrows: [{ from: 'v2-mf', to: 'f1', color: '#8be9fd' }, { from: 'v2-mf', to: 'f2', color: '#8be9fd' }],
+        fadeArrows: true,
+      },
+      { label: 'ADD COLUMN', dur: 2200,
+        desc: 'Adding a column doesn\'t touch existing data at all. A new data file (data-1.lance) gets appended to Fragment 1, covering just the new column. The manifest keeps track of which data file handles which columns. So a single fragment can actually hold multiple data files for different columns.',
+        insight: 'Now THIS is a crazy awesome feature. Ad-hoc adding of columns and their values!? Usually you\'d need to copy everything just to achieve this.',
+        reveal: ['f1-sub'],
+        read: ['f1-sub'],
+        completed: ['v1-mf', 'v2-mf', 'f1', 'f2'],
+        arrows: [{ from: 'v2-mf', to: 'f1-sub', color: '#f1fa8c' }],
+        fadeArrows: true,
+      },
+      { label: 'DELETE 50 Rows (V3)', dur: 2200,
+        desc: 'Rather than rewriting Fragment 1, Lance just drops a deletion file under _deletions/ that marks 50 rows as removed. There are two formats: BITMAP (Roaring Bitmap) for when you\'re deleting a lot, and ARROW_ARRAY (Int32Array) for when it\'s just a few, picked automatically based on how dense the deletions are. Manifest V3 references this deletion file together with the ones in V2.',
+        insight: 'Deletes are also files. The original files can be removed by running compaction.',
+        reveal: ['v3-mf', 'del1'],
+        read: ['v3-mf', 'del1'],
+        completed: ['v1-mf', 'v2-mf', 'f1', 'f1-sub', 'f2'],
+        arrows: [{ from: 'v3-mf', to: 'f1', color: '#f8f8f2' }, { from: 'v3-mf', to: 'f2', color: '#f8f8f2' }, { from: 'v3-mf', to: 'del1', color: '#ff5555' }],
+        fadeArrows: true,
+      },
+      { label: 'UPDATE 50 Rows (V4)', dur: 2200,
+        desc: 'Under the hood, an UPDATE is really a delete-then-insert done atomically. The affected rows get marked as deleted, and their new values go into a new fragment. A new deletion file 1-4-0.bin replaces the V3 one, now tracking 100 total deleted rows in Fragment 1. Lance can handle this in two ways: either rewriting entire rows, or just the updated columns.',
+        insight: 'Today, atomicity can be achieved on all major object storages.',
+        reveal: ['v4-mf', 'f3', 'del1-v4'],
+        read: ['v4-mf', 'f3', 'del1-v4'],
+        completed: ['v1-mf', 'v2-mf', 'v3-mf', 'f1', 'f1-sub', 'f2', 'del1'],
+        arrows: [{ from: 'v4-mf', to: 'f1', color: '#f8f8f2' }, { from: 'v4-mf', to: 'f2', color: '#f8f8f2' }, { from: 'v4-mf', to: 'f3', color: '#f8f8f2' }, { from: 'v4-mf', to: 'del1-v4', color: '#ff5555' }],
+        fadeArrows: true,
+      },
+      { label: 'MVCC: Concurrent Readers', dur: 2500,
+        desc: 'Reader A opens V1 and sees the original 500 rows. Reader B opens V4 and sees 650 rows (500 - 100 deleted/updated + 200 inserted + 50 updated). They\'re both reading at the same time with zero locks. Each one just follows its own manifest\'s fragment list.',
+        insight: 'Each reader just pins a version number. Since manifests never change, you get both lock-free reads AND time travel.',
+        read: ['v1-mf'],
+        readAlt: ['v4-mf'],
+        completed: ['v2-mf', 'v3-mf', 'f1', 'f1-sub', 'f2', 'f3', 'del1', 'del1-v4'],
+        arrows: [{ from: 'v1-mf', to: 'f1', color: '#f1fa8c' }],
+        arrowsAlt: [{ from: 'v4-mf', to: 'f1', color: '#50fa7b' }, { from: 'v4-mf', to: 'f2', color: '#50fa7b' }, { from: 'v4-mf', to: 'f3', color: '#50fa7b' }, { from: 'v4-mf', to: 'del1-v4', color: '#ff5555' }],
+      },
+      { label: 'Compaction: Rewrite -> V5', dur: 2500,
+        desc: 'After a while, small fragments and deletion files pile up. A Rewrite transaction merges them together, removes the deleted rows, and produces nicely compacted data. Fragment IDs are pre-reserved (ReserveFragments) so they don\'t clash with concurrent writers.',
+        insight: 'Read more about it <a href="https://docs.rs/lancedb/0.26.1/lancedb/table/enum.OptimizeAction.html" target="_blank" rel="noopener">here↗</a>.',
+        reveal: ['v5-mf', 'f4-compact'],
+        read: ['v5-mf', 'f4-compact'],
+        completed: ['v1-mf', 'v2-mf', 'v3-mf', 'v4-mf'],
+        skip: ['f1', 'f1-sub', 'f2', 'f3', 'del1', 'del1-v4'],
+        arrows: [{ from: 'v5-mf', to: 'f4-compact', color: '#bd93f9' }],
+        fadeArrows: true,
+      },
+    ],
+  },
+  btree: {
+    sql: 'SELECT * FROM products WHERE price = 42.50',
+    steps: [
+      { label: 'Index Discovery', dur: 1800,
+        desc: 'The manifest knows about the indexes. In this example, there\'s a BTree index on col_price, and is identified by some UUID. The index files sit under _indices/{uuid}/ and are split into two parts: page_lookup.lance (the BTree without leafs) and page_data.lance (the tree\'s leaf data).',
+        insight: 'Because index info lives in the manifest, it is known during query planning.',
+      },
+      { label: 'Search page_lookup.lance', dur: 2200,
+        desc: 'The BTree (page_lookup.lance) is small enough to stay cached in memory. Each entry just stores the min and max value for a leaf page. A quick binary search for 42.50 lands on page 2: min=32.50, max=48.99.',
+        read: ['pl-2'],
+        skip: ['pl-0','pl-1','pl-3','pd-0','pd-1','pd-2','pd-3','dt-price','dt-name','dt-cat'],
+      },
+      { label: 'Read page_data.lance (Pg 2)', dur: 2200,
+        desc: 'Page 2 in page_data.lance has sorted values paired with row IDs. We walk through the sorted values: [..., 35.75, 42.50, 44.00, ...] and there it is, 42.50 maps to row_id 1847.',
+        insight: 'page_lookup also tracks null_count per page, so IS NULL queries can skip pages that have no nulls.',
+        read: ['pd-2'],
+        completed: ['pl-2'],
+        skip: ['pl-0','pl-1','pl-3','pd-0','pd-1','pd-3','dt-price','dt-name','dt-cat'],
+        arrows: [{ from: 'pl-2', to: 'pd-2', color: '#bd93f9' }],
+      },
+      { label: 'Fetch Row from Fragment', dur: 2000,
+        desc: 'Row ID 1847 lands in Fragment 3 at physical position 47. We grab col_price.lance, col_name.lance, and col_category.lance for that row.',
+        insight: 'Only the columns we actually need.',
+        read: ['dt-price'],
+        skip: ['pl-0','pl-1','pl-3','pd-0','pd-1','pd-3'],
+        completed: ['pl-2', 'pd-2'],
+        arrows: [{ from: 'pd-2', to: 'dt-price', color: '#ffb86c' }],
+        fadeArrows: true,
+      },
+      { label: 'Return Result', dur: 1800,
+        desc: 'And we\'re done. Row 1847: {price: 42.50, name: "Widget Pro", category: "electronics"}. Total I/O: 1 leaf page read + a column read from the fragment for each column we needed.',
+        read: ['dt-price', 'dt-name', 'dt-cat'],
+        skip: ['pl-0','pl-1','pl-3','pd-0','pd-1','pd-3'],
+        completed: ['pl-2', 'pd-2'],
+      },
+    ],
+  },
+  writers: {
+    sql: 'MVCC: Concurrent Writers - Conflict Resolution',
+    steps: [
+      { label: 'Two Writers Begin', dur: 2200,
+        desc: 'Writer A and Writer B both start from V4 as their base version. Nobody takes any locks, Lance uses optimistic concurrency control. Each writer prepares its changes on its own, and conflicts only get caught at commit time.',
+        read: ['w-v4'],
+        completed: ['w-f1'],
+        arrows: [{ from: 'w-v4', to: 'w-f1', color: '#bd93f9' }],
+      },
+      { label: 'Writer A Commits (V5)', dur: 2400,
+        desc: 'Writer A writes Fragment 5, then drops a transaction file 4-{uuid-a}.txn (a serialized protobuf describing what changed). Then comes the critical part: Writer A claims 5.manifest using an atomic object storage primitive (e.g. If-None-Match: * on S3 PutObject).',
+        insight: 'Atomicity can be achieved on all major object storages.',
+        reveal: ['w-v5', 'w-f-a', 'w-txn-a'],
+        read: ['w-v5', 'w-f-a', 'w-txn-a'],
+        completed: ['w-v4', 'w-f1'],
+        arrows: [{ from: 'w-v5', to: 'w-f1', color: '#f8f8f2' }, { from: 'w-v5', to: 'w-f-a', color: '#ffb86c' }],
+        fadeArrows: true,
+      },
+      { label: 'Writer B Conflict Detected', dur: 2400,
+        desc: 'Writer B tries to write 5.manifest, but the atomic write fails, as Writer A already claimed that version. So Writer B reads Writer A\'s transaction file (4-{uuid-a}.txn) to figure out what changed. Transaction files let you analyze conflicts without re-reading any actual data.',
+        reveal: ['w-v5-fail', 'w-f-b'],
+        read: ['w-v5-fail', 'w-txn-a'],
+        completed: ['w-v4', 'w-v5', 'w-f1', 'w-f-a'],
+        arrows: [{ from: 'w-v5-fail', to: 'w-txn-a', color: '#ff5555' }],
+        fadeArrows: true,
+      },
+      { label: 'Conflict Resolution: 3 Outcomes', dur: 2800,
+        desc: 'There are three possible outcomes: (1) Rebasable - the changes don\'t actually conflict (e.g., they touched different fragments), so they get auto-rebased onto the new version. (2) Retryable - the app can re-run the operation against the new version. (3) Incompatible - a real conflict that can\'t be resolved automatically. In practice, most concurrent writes to different data just get rebased without any fuss.',
+        insight: 'In practice: auto-rebase happens most of the time, retries are rare, and hard failures are very rare.',
+        read: ['w-txn-a', 'w-f-b'],
+        completed: ['w-v4', 'w-v5', 'w-v5-fail', 'w-f1', 'w-f-a'],
+      },
+      { label: 'Writer B Rebases (V6)', dur: 2400,
+        desc: 'Writer B\'s transaction gets automatically rebased onto V5. The new 6.manifest includes everything: the existing data, Fragment 5 (from Writer A), and Fragment 6 (from Writer B).',
+        reveal: ['w-v6'],
+        read: ['w-v6'],
+        completed: ['w-v4', 'w-v5', 'w-v5-fail', 'w-txn-a', 'w-f1', 'w-f-a', 'w-f-b'],
+        arrows: [{ from: 'w-v6', to: 'w-f1', color: '#f8f8f2' }, { from: 'w-v6', to: 'w-f-a', color: '#ffb86c' }, { from: 'w-v6', to: 'w-f-b', color: '#50fa7b' }],
+        fadeArrows: true,
+      },
+    ],
+  },
+};
+
+// ── State & DOM ──
+const state = { query: 'mvcc', phase: 'idle', step: -1, elapsed: 0, speed: 1, lastTs: 0 };
+const $ = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+
+const canvas = $('#canvas');
+const svgEl = $('#svg');
+const panel = {
+  query: $('#sp-query'), step: $('#sp-step'), label: $('#sp-label'),
+  desc: $('#sp-desc'), insight: $('#sp-insight'),
+};
+const btn = { play: $('#btn-play'), reset: $('#btn-reset'), prev: $('#btn-prev'), next: $('#btn-next') };
+
+// ── Block Creation ──
+const blocks = {};
+const svgDyn = [];
+const labelEls = [];
+
+function createBlock(def, group) {
+  const el = document.createElement('div');
+  el.className = 'block';
+  if (def.startHidden) el.classList.add('unrevealed');
+  Object.assign(el.style, {
+    left: def.x + 'px', top: def.y + 'px', width: def.w + 'px', height: def.h + 'px',
+    background: def.color, fontSize: (def.h < 28 ? 11 : 12) + 'px',
+    color: LIGHT_BG.has(def.color) ? 'rgba(0,0,0,0.8)' : 'rgba(255,255,255,0.95)',
+  });
+  el.textContent = def.label;
+  el.dataset.group = group;
+  canvas.appendChild(el);
+  blocks[def.id] = { el, x: def.x, y: def.y, w: def.w, h: def.h, group, startHidden: !!def.startHidden };
+}
+
+function createLabel(lbl) {
+  const el = document.createElement('div');
+  el.className = 'col-title';
+  Object.assign(el.style, { left: lbl.x + 'px', top: lbl.y + 'px' });
+  el.textContent = lbl.text;
+  el.dataset.group = lbl.group;
+  el.dataset.origX = lbl.x;
+  if (lbl.sub) {
+    const sub = document.createElement('span');
+    sub.className = 'label-hint';
+    sub.style.cssText = 'font-size:10px;color:#666;font-weight:normal;margin-left:6px';
+    sub.textContent = lbl.sub;
+    el.appendChild(sub);
+  }
+  canvas.appendChild(el);
+  labelEls.push(el);
+}
+
+// ── Block State ──
+function setBlockState(id, newState) {
+  const b = blocks[id];
+  if (!b) return;
+  if (newState === 'skipped') {
+    if (!b.el.classList.contains('reading') && !b.el.classList.contains('reading-alt') && !b.el.classList.contains('completed')) {
+      b.el.classList.add('skipped');
+    }
+    return;
+  }
+  if (newState === 'idle') {
+    b.el.classList.remove('reading', 'reading-alt', 'completed', 'skipped');
+    return;
+  }
+  b.el.classList.remove('reading', 'reading-alt', 'completed', 'skipped');
+  if (newState === 'reading') b.el.classList.add('reading');
+  else if (newState === 'reading-alt') b.el.classList.add('reading-alt');
+  else if (newState === 'completed') b.el.classList.add('completed');
+}
+
+function resetAllBlocks() {
+  Object.keys(blocks).forEach(id => {
+    setBlockState(id, 'idle');
+    if (blocks[id].startHidden) blocks[id].el.classList.add('unrevealed');
+    else blocks[id].el.classList.remove('unrevealed');
+  });
+}
+
+function showGroup(group) {
+  Object.values(blocks).forEach(b => {
+    b.el.style.display = b.group === group ? '' : 'none';
+  });
+  canvas.querySelectorAll('.col-title, .tree-connector').forEach(el => {
+    el.style.display = el.dataset.group === group ? '' : 'none';
+  });
+}
+
+// ── SVG ──
+function svgCreate(tag, attrs) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+}
+
+function clearSvg() {
+  svgDyn.forEach(el => el.remove());
+  svgDyn.length = 0;
+}
+
+function fadePreviousArrows() {
+  svgDyn.forEach(el => {
+    if (el.classList.contains('arrow-path') || el.classList.contains('arrow-head')) {
+      el.style.opacity = '';
+      el.style.transition = '';
+      el.classList.add('faded');
+    }
+  });
+}
+
+function addArrow(fromId, toId, color, animate) {
+  const fb = blocks[fromId], tb = blocks[toId];
+  if (!fb || !tb) return;
+
+  const fcx = fb.x + fb.w / 2, fcy = fb.y + fb.h / 2;
+  const tcx = tb.x + tb.w / 2, tcy = tb.y + tb.h / 2;
+  const dx = Math.abs(tcx - fcx), dy = Math.abs(tcy - fcy);
+
+  let x1, y1, x2, y2, d;
+
+  if (dx > dy * 0.6) {
+    // Horizontal arrow
+    const goRight = fb.x < tb.x;
+    x1 = goRight ? fb.x + fb.w : fb.x;
+    x2 = goRight ? tb.x : tb.x + tb.w;
+    y1 = fb.y + fb.h / 2;
+    y2 = tb.y + tb.h / 2;
+    const mx = (x1 + x2) / 2;
+    d = `M${x1} ${y1} C${mx} ${y1},${mx} ${y2},${x2} ${y2}`;
+  } else {
+    // Same-column vertical arrow - route to the side
+    const mid = arrowMid;
+    const side = fb.x < mid ? fb.x - 30 : fb.x + fb.w + 30;
+    x1 = fb.x < mid ? fb.x : fb.x + fb.w;
+    x2 = tb.x < mid ? tb.x : tb.x + tb.w;
+    y1 = fb.y + fb.h / 2;
+    y2 = tb.y + tb.h / 2;
+    d = `M${x1} ${y1} C${side} ${y1},${side} ${y2},${x2} ${y2}`;
+  }
+
+  const path = svgCreate('path', {
+    d, stroke: color, 'stroke-width': '2.5', 'stroke-linecap': 'round', fill: 'none',
+  });
+  path.classList.add('arrow-path');
+  svgEl.appendChild(path);
+
+  // Arrowhead
+  const segs = 40;
+  const len = path.getTotalLength();
+  const p1 = path.getPointAtLength(len);
+  const p0 = path.getPointAtLength(Math.max(0, len - 2));
+  const ang = Math.atan2(p1.y - p0.y, p1.x - p0.x);
+  const s = 10;
+  const pts = [
+    p1.x, p1.y,
+    p1.x - s * Math.cos(ang - 0.4), p1.y - s * Math.sin(ang - 0.4),
+    p1.x - s * Math.cos(ang + 0.4), p1.y - s * Math.sin(ang + 0.4),
+  ].join(',');
+  const head = svgCreate('polygon', { points: pts, fill: color });
+  head.classList.add('arrow-head');
+  svgEl.appendChild(head);
+  svgDyn.push(path, head);
+
+  if (animate !== false) {
+    const totalLen = path.getTotalLength();
+    path.style.strokeDasharray = totalLen;
+    path.style.strokeDashoffset = totalLen;
+    head.style.opacity = '0';
+    path.getBoundingClientRect();
+    path.style.transition = 'stroke-dashoffset 700ms ease-out';
+    path.style.strokeDashoffset = '0';
+    setTimeout(() => {
+      if (head.classList.contains('faded')) return;
+      head.style.transition = 'opacity 200ms ease-in';
+      head.style.opacity = '1';
+    }, 520);
+  }
+}
+
+// ── Animation Engine ──
+function getQuery() { return QUERIES[state.query]; }
+
+function stepHasNewArrows(step) {
+  return step.fadeArrows || step.arrows || step.arrowsAlt;
+}
+
+function resetVisuals() {
+  resetAllBlocks();
+  clearSvg();
+}
+
+function reset() {
+  Object.assign(state, { phase: 'idle', step: -1, elapsed: 0, lastTs: 0 });
+  resetVisuals();
+  panel.query.textContent = '';
+  panel.step.textContent = '';
+  panel.label.textContent = 'Press Play to begin';
+  panel.desc.innerHTML = '';
+  panel.insight.innerHTML = '';
+  updateControls();
+}
+
+function colorizeText(text) {
+  var html = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  var entities = [
+    ['Reader A', '#f1fa8c'], ['Reader B', '#50fa7b'],
+    ['Writer A', '#ffb86c'], ['Writer B', '#50fa7b'],
+  ];
+  entities.forEach(function(e) {
+    html = html.split(e[0]).join('<span style="color:' + e[1] + ';font-weight:bold">' + e[0] + '</span>');
+  });
+  return html;
+}
+
+function updatePanel(idx) {
+  const q = getQuery(), step = q.steps[idx];
+  panel.query.textContent = q.sql;
+  panel.step.textContent = 'Step ' + (idx + 1) + ' / ' + q.steps.length;
+  panel.label.innerHTML = colorizeText(step.label);
+  panel.desc.innerHTML = colorizeText(step.desc);
+  panel.insight.innerHTML = step.insight || '';
+  panel.insight.hidden = !step.insight;
+}
+
+function applyStepEffects(idx, animate) {
+  const step = getQuery().steps[idx];
+  if (step.reveal) step.reveal.forEach(id => {
+    if (blocks[id]) blocks[id].el.classList.remove('unrevealed');
+  });
+  if (step.skip) step.skip.forEach(id => setBlockState(id, 'skipped'));
+  if (step.completed) step.completed.forEach(id => setBlockState(id, 'completed'));
+  if (step.read) step.read.forEach(id => setBlockState(id, 'reading'));
+  if (step.readAlt) step.readAlt.forEach(id => setBlockState(id, 'reading-alt'));
+  if (step.arrows) step.arrows.forEach(a => addArrow(a.from, a.to, a.color, animate));
+  if (step.arrowsAlt) step.arrowsAlt.forEach(a => addArrow(a.from, a.to, a.color, animate));
+}
+
+function markStepCompleted(idx) {
+  const step = getQuery().steps[idx];
+  if (step.read) step.read.forEach(id => setBlockState(id, 'completed'));
+  if (step.readAlt) step.readAlt.forEach(id => setBlockState(id, 'completed'));
+}
+
+function beginStep(idx) {
+  const q = getQuery();
+  if (idx >= q.steps.length) {
+    if (idx > 0) markStepCompleted(idx - 1);
+    state.phase = 'finished';
+    updateControls();
+    return;
+  }
+
+  const step = q.steps[idx];
+  if (idx > 0) {
+    const continuing = new Set([
+      ...(step.read || []), ...(step.readAlt || []),
+      ...(step.completed || []),
+    ]);
+    const prev = q.steps[idx - 1];
+    if (prev.read) prev.read.forEach(id => { if (!continuing.has(id)) setBlockState(id, 'completed'); });
+    if (prev.readAlt) prev.readAlt.forEach(id => { if (!continuing.has(id)) setBlockState(id, 'completed'); });
+  }
+
+  if (step.fadeArrows) fadePreviousArrows();
+  state.step = idx;
+  state.elapsed = 0;
+  updatePanel(idx);
+  applyStepEffects(idx, true);
+}
+
+function jumpToStep(targetIdx) {
+  const q = getQuery();
+  if (targetIdx < 0 || targetIdx >= q.steps.length) return;
+
+  canvas.classList.add('no-transitions');
+  resetVisuals();
+
+  for (let i = 0; i < targetIdx; i++) {
+    applyStepEffects(i, false);
+    markStepCompleted(i);
+    const next = q.steps[i + 1];
+    if (next && next.fadeArrows) fadePreviousArrows();
+  }
+
+  canvas.classList.remove('no-transitions');
+  document.body.offsetHeight;
+
+  state.step = targetIdx;
+  state.elapsed = 0;
+  updatePanel(targetIdx);
+  applyStepEffects(targetIdx, true);
+  state.phase = 'paused';
+  updateControls();
+}
+
+function tick(ts) {
+  if (state.phase === 'playing') {
+    if (!state.lastTs) state.lastTs = ts;
+    state.elapsed += Math.min(ts - state.lastTs, 200) * state.speed;
+    state.lastTs = ts;
+    const q = getQuery();
+    if (state.step >= 0 && state.step < q.steps.length && state.elapsed >= q.steps[state.step].dur) {
+      beginStep(state.step + 1);
+    }
+  } else {
+    state.lastTs = 0;
+  }
+  requestAnimationFrame(tick);
+}
+
+// ── Controls ──
+function updateControls() {
+  btn.play.disabled = (state.phase === 'finished');
+  btn.play.textContent = state.phase === 'playing' ? '\u23F8 Pause'
+    : state.phase === 'paused' ? '\u25B6 Resume' : '\u25B6 Play';
+  btn.prev.disabled = (state.phase === 'idle') || (state.step <= 0 && state.phase !== 'finished');
+  btn.next.disabled = (state.phase === 'finished') || (state.phase !== 'idle' && state.step >= getQuery().steps.length - 1);
+}
+
+$$('.query-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    $$('.query-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    state.query = tab.dataset.query;
+    showGroup(state.query);
+    reset();
+    jumpToStep(0);
+  });
+});
+
+btn.play.addEventListener('click', () => {
+  if (state.phase === 'playing') {
+    state.phase = 'paused';
+  } else if (state.phase === 'idle' || state.phase === 'finished') {
+    reset();
+    state.phase = 'playing';
+    beginStep(0);
+  } else {
+    state.phase = 'playing';
+  }
+  updateControls();
+});
+
+btn.reset.addEventListener('click', reset);
+
+btn.prev.addEventListener('click', () => {
+  if (state.phase === 'idle') return;
+  jumpToStep(state.phase === 'finished' ? getQuery().steps.length - 1 : state.step - 1);
+});
+
+btn.next.addEventListener('click', () => {
+  if (state.phase === 'idle') {
+    state.phase = 'paused';
+    beginStep(0);
+  } else if (state.step < getQuery().steps.length - 1) {
+    state.phase = 'paused';
+    beginStep(state.step + 1);
+  }
+  updateControls();
+});
+
+document.addEventListener('keydown', e => {
+  const actions = { ArrowLeft: btn.prev, ArrowRight: btn.next, ' ': btn.play };
+  if (actions[e.key]) { actions[e.key].click(); e.preventDefault(); }
+});
+
+$('#speed').addEventListener('input', function() {
+  state.speed = parseFloat(this.value);
+  $('#speed-val').textContent = state.speed + '\u00d7';
+});
+
+// ── Init ──
+const PANEL_X = R_X + Math.max(DT_W, DF_W, WD_W) + 30;
+const panelEl = $('#step-panel');
+panelEl.style.left = PANEL_X + 'px';
+panelEl.style.width = (1200 - PANEL_X - 20) + 'px';
+
+MVCC_DEFS.forEach(def => createBlock(def, 'mvcc'));
+BTREE_DEFS.forEach(def => createBlock(def, 'btree'));
+WRITERS_DEFS.forEach(def => createBlock(def, 'writers'));
+MVCC_LABELS.forEach(createLabel);
+BTREE_LABELS.forEach(createLabel);
+WRITERS_LABELS.forEach(createLabel);
+
+// Tree connectors: _indices/{uuid}/ -> page_lookup.lance & page_data.lance
+[[1, 32, 165], [14, 53, 1], [14, 197, 1]].forEach(([w, top, h]) => {
+  const el = document.createElement('div');
+  el.className = 'tree-connector';
+  Object.assign(el.style, { left: '26px', top: top + 'px', width: w + 'px', height: h + 'px' });
+  el.dataset.group = 'btree';
+  canvas.appendChild(el);
+});
+
+showGroup('mvcc');
+requestAnimationFrame(tick);
+jumpToStep(0);
+
+let currentMobile = null;
+const allDefs = [...MVCC_DEFS, ...BTREE_DEFS, ...WRITERS_DEFS];
+
+function setLayout(mobile) {
+  if (mobile === currentMobile) return;
+  currentMobile = mobile;
+  arrowMid = mobile ? (L_X_M + R_X_M) / 2 : (L_X + R_X) / 2;
+  canvas.style.width = (mobile ? CANVAS_W_M : 1200) + 'px';
+  allDefs.forEach(def => {
+    const b = blocks[def.id];
+    if (mobile) {
+      b.x = def.x >= R_X ? R_X_M : L_X_M;
+      b.w = W_MAP_M[def.w] || def.w;
+    } else {
+      b.x = def.x;
+      b.w = def.w;
+    }
+    b.el.style.left = b.x + 'px';
+    b.el.style.width = b.w + 'px';
+  });
+  labelEls.forEach(el => {
+    const origX = parseInt(el.dataset.origX);
+    const newX = mobile
+      ? (origX >= R_X - 10 ? origX - R_X + R_X_M : origX - L_X + L_X_M)
+      : origX;
+    el.style.left = newX + 'px';
+  });
+  clearSvg();
+  if (state.step >= 0 && state.phase !== 'idle') {
+    const ph = state.phase;
+    jumpToStep(state.step);
+    if (ph === 'playing') { state.phase = 'playing'; updateControls(); }
+  }
+}
+
+const wrapper = $('#canvas-wrapper');
+const controlsEl = document.querySelector('.controls');
+function scaleCanvas() {
+  const mobile = window.innerWidth <= 900;
+  setLayout(mobile);
+  const cw = mobile ? CANVAS_W_M : 1200;
+  const scale = wrapper.clientWidth / cw;
+  canvas.style.transform = 'scale(' + scale + ')';
+  wrapper.style.height = ((mobile ? 330 : 400) * scale) + 'px';
+  if (mobile && panelEl.parentElement === canvas) {
+    controlsEl.parentElement.insertBefore(panelEl, controlsEl);
+  } else if (!mobile && panelEl.parentElement !== canvas) {
+    canvas.appendChild(panelEl);
+  }
+}
+new ResizeObserver(scaleCanvas).observe(wrapper);
+scaleCanvas();
+if (window.frameElement) {
+  let lastH = 0;
+  new ResizeObserver(() => {
+    const h = document.body.scrollHeight;
+    if (h !== lastH) { lastH = h; window.frameElement.style.height = h + 'px'; }
+  }).observe(document.body);
+}
+
+})();
+</script>
+</body>
+</html>
