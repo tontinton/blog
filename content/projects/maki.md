@@ -1,6 +1,6 @@
 +++
 title = "maki"
-description = "An AI coding agent - Rust"
+description = "An efficient AI coding agent - Rust"
 weight = 0
 
 [extra]
