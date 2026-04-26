@@ -284,7 +284,7 @@ One such append only data structure is called the `Log Structured Merge tree` or
 
 LSM trees' general concept is to buffer writes to a data structure in memory, preferably one that is easy to iterate in a sorted fashion (for example `AVL tree` / `Red Black tree` / `Skip List`), and once it reaches some capacity, flush it sorted to a new file called a `Sorted String Table` or `SSTable`. An SSTable stores sorted data, letting us leverage binary search and sparse indexes to lower the amount of disk I/O.
 
-<img class="svg" src="/lsm_tree_write.svg"/>
+<img class="svg" src="/lsm_tree_write.svg" loading="lazy"/>
 
 To maintain durability, when data is written to memory, the action is stored in a `Write-Ahead Log` or `WAL`, which is read on program's startup to reset state to as it was before shutting down / crashing.
 
@@ -292,13 +292,13 @@ Deletions are also appended the same way a write would, it simply holds a tombst
 
 The read path is where it gets a bit wonky, reading from an LSM tree is done by first searching for the item of the provided key in the data structure in memory, if not found, it then searches for the item by iterating over all SSTables on disk, from the newest one to the oldest.
 
-<img class="svg" src="/lsm_tree_read.svg"/>
+<img class="svg" src="/lsm_tree_read.svg" loading="lazy"/>
 
 You can probably already tell that as more and more data is written, there will be more SSTables to go through to find an item of a specific key, and even though each file is sorted, going over a lot of small files is slower than going over one big file with all items (lookup time complexity: `log(num_files * table_size) < num_files * log(table_size)`). This is another reason why LSM trees require compaction, in addition to removing tombstones.
 
 In other words: compaction combines a few small SSTables into one big SSTable, removing all tombstones in the process, and is usually run as a background process.
 
-<img class="svg" src="/lsm_tree_compact.svg"/>
+<img class="svg" src="/lsm_tree_compact.svg" loading="lazy"/>
 
 Compaction can be implemented using a binary heap / priority queue, something like:
 
@@ -570,7 +570,7 @@ A cool trick is to introduce the concept of virtual nodes, where you add multipl
 
 Here's a more detailed example of a migration in a cluster with a replication factor of 3:
 
-<img class="svg" src="/migration.svg"/>
+<img class="svg" src="/migration.svg" loading="lazy"/>
 
 > Same colored nodes are virtual nodes of the same node, green arrows show to which node an item is being migrated to, red arrows show item deletions from nodes and the brown diamonds are items.
 
@@ -600,7 +600,7 @@ But if clocks are so unreliable, how else are we supposed to know which value is
 
 Some systems (for example `Dynamo`) try to solve this partially using `Version Vectors`, where you attach a (node, counter) pair for each version of an item, which gives you the ability to find causality between the different versions. By finding versions of values that are definitely newer (have a higher counter) you can remove some versions of a value, which makes the problem easier.
 
-<img class="svg" src="/version_vector.svg"/>
+<img class="svg" src="/version_vector.svg" loading="lazy"/>
 
 > An example showing how easily conflicts arise. At the end we are left with {v2, v3} as the conflicting values for the same key. The reason I removed v1 is to show that by using something like `Version Vectors`, versions of values can be safely removed to minimize the amount of conflicts. To learn more on `Version Vectors` and their implementations, I recommend reading <a href="https://github.com/ricardobcl/Dotted-Version-Vectors">Dotted Version Vectors</a>.
 

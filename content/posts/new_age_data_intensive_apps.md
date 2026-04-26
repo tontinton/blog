@@ -243,7 +243,7 @@ Then on a search query:
   * Note that it downloads the files in parallel, getting higher throughput.
 * Use tantivy to search the relevant documents in each file's inverted index.
 
-<img class="svg" src="/quickwit_architecture.svg"/>
+<img class="svg" src="/quickwit_architecture.svg" loading="lazy"/>
 
 > Image inspired by <a href="https://quickwit.io/blog/quickwit-101">Quickwit 101 - Architecture of a distributed search engine on object storage</a>.
 
@@ -326,7 +326,7 @@ Mostly in high throughput workloads, where you don't care about a second of late
 
 They took Postgres and made it work with an architecture that stores the actual data in an object storage instead of local disk.
 
-<img class="svg" src="/neon_architecture.svg"/>
+<img class="svg" src="/neon_architecture.svg" loading="lazy"/>
 
 Postgres stores transaction logs into a data structure called a WAL (Write-Ahead-Log). Neon streams log entries from this WAL to a service they called Safekeeper, using the native Postgres replication protocol. Safekeeper nodes provide durability and fault-tolerance using a <a href="https://neon.tech/blog/paxos">custom made Paxos</a>, where the Postgres nodes are the proposers and safekeepers are the acceptors (verified by this <a href="https://github.com/neondatabase/neon/blob/main/safekeeper/spec/ProposerAcceptorConsensus.tla">TLA+</a>).
 
