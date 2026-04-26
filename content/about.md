@@ -1,6 +1,5 @@
 +++
 title = "About"
-path = "about"
 +++
 
 <img src="/tontinton.jpg" style="margin: 24px 0px; width: 256px; height: 256px; border-radius: 1em; display: block; margin-left: auto; margin-right: auto;">

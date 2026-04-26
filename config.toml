@@ -4,14 +4,14 @@ title = "tontinton"
 
 compile_sass = true
 build_search_index = false
-generate_feed = true
+generate_feeds = true
 minify_html = true
 
 theme = "apollo"
 
-[markdown]
-highlight_code = true
-highlight_theme = "dracula"
+[markdown.highlighting]
+enabled = true
+theme = "dracula"
 
 [extra]
 toc = false
