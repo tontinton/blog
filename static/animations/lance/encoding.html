@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Structural encoding: Arrow vs Lance</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #242630;
+  --surface: #44475a;
+  --text: #f8f8f2;
+  --muted: #8292c9;
+  --accent: #bd93f9;
+  --gold: #f1fa8c;
+  --green: #50fa7b;
+  --red: #ff5555;
+  --border: rgba(68, 71, 90, 0.5);
+  --mono: 'DejaVu Sans Mono', monospace;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'DejaVu Sans', sans-serif;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px;
+  gap: 8px;
+}
+
+/* ── Scene Tabs ── */
+.scene-tabs { display: flex; gap: 8px; }
+
+.scene-tab {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 4px;
+  padding: 10px 20px; min-width: 250px;
+  background: var(--surface); border: 2px solid #333; border-radius: 8px;
+  color: var(--text); cursor: pointer; font-size: 16px; transition: all 0.15s;
+}
+.scene-tab:hover { border-color: #555; background: #1e2d50; }
+.scene-tab.active { border-color: var(--accent); background: #1e2d50; }
+.scene-tab code { font-family: var(--mono); font-size: 12px; color: #888; }
+.scene-tab.active code { color: #aaf; }
+
+/* ── Canvas ── */
+#canvas-wrapper { width: 100%; position: relative; }
+#canvas { position: relative; width: 1200px; height: 300px; transform-origin: top left; }
+
+.col-title {
+  position: absolute; top: 4px; font-size: 17px; font-weight: bold;
+  color: #ccc; pointer-events: none; transform: translateX(-50%);
+}
+
+/* ── Blocks ── */
+.block {
+  position: absolute; border-radius: 5px; display: flex; align-items: center;
+  padding: 0 10px; font-family: var(--mono); font-size: 12px;
+  border: 2px solid transparent;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.3); overflow: hidden;
+  transition: opacity 0.3s, filter 0.3s, border-color 0.3s, box-shadow 0.3s;
+}
+.block.reading {
+  border-color: rgba(255,215,0,0.8);
+  animation: pulse 2.2s ease-in-out infinite; z-index: 3;
+}
+.block.completed {
+  border-color: rgba(0,200,83,0.5);
+  box-shadow: 0 0 10px rgba(0,200,83,0.15); z-index: 1;
+}
+.block.skipped { opacity: 0.28; filter: saturate(0.15) brightness(0.5); }
+@keyframes pulse {
+  0%,100% { box-shadow: 0 0 8px rgba(255,215,0,0.15), inset 0 0 25px rgba(255,215,0,0.05); }
+  50%     { box-shadow: 0 0 18px rgba(255,215,0,0.35), inset 0 0 25px rgba(255,215,0,0.12); }
+}
+@media (prefers-reduced-motion: reduce) { .block.reading { animation: none; } }
+
+.partial-mask {
+  position: absolute; top: -2px; right: -2px; bottom: -2px;
+  background: rgba(0,0,0,0.6); border-radius: 0 5px 5px 0; pointer-events: none;
+}
+.block-divider {
+  position: absolute; top: 3px; bottom: 3px; width: 2px;
+  background: rgba(255,255,255,0.2); pointer-events: none;
+}
+
+/* ── Step Panel ── */
+#step-panel {
+  position: absolute; left: 640px; top: 34px; width: 500px;
+  background: rgba(22,33,62,0.95); border: 1px solid var(--border);
+  border-radius: 10px; padding: 14px 16px; z-index: 10;
+}
+.sp-query { font-size: 12px; color: var(--muted); text-align: center; font-family: var(--mono); margin-bottom: 6px; min-height: 14px; }
+.sp-step { font-size: 16px; font-weight: bold; color: #fff; text-align: center; margin-bottom: 2px; min-height: 20px; }
+.sp-label { font-size: 14px; color: var(--gold); text-align: center; margin-bottom: 8px; min-height: 18px; }
+.sp-sep { border: none; border-top: 1px solid rgba(68,68,119,0.3); margin: 8px 0; }
+.sp-desc { font-family: var(--mono); font-size: 12px; color: #ccc; line-height: 1.5; white-space: pre-line; }
+.sp-insight { font-family: var(--mono); font-size: 11px; color: var(--green); font-style: italic; margin-top: 8px; line-height: 1.4; min-height: 14px; }
+.sp-stats {
+  font-family: var(--mono); font-size: 12px; color: #99b; margin-top: 10px;
+  display: flex; gap: 14px; flex-wrap: wrap; justify-content: center;
+  border-top: 1px solid rgba(68,68,119,0.3); padding-top: 8px;
+}
+.sp-stats b { color: var(--gold); font-weight: bold; }
+
+/* ── Note ── */
+.note {
+  position: absolute; font-family: var(--mono); font-size: 11px;
+  color: var(--muted); pointer-events: none; transform: translateX(-50%);
+  text-align: center; line-height: 1.5;
+}
+
+/* ── SVG ── */
+#svg { position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none; z-index: 5; }
+.arrow-path { fill: none; stroke-width: 2.5; stroke-linecap: round; }
+.arrow-path.faded, .arrow-head.faded { opacity: 0.25; transition: opacity 0.4s; }
+.no-transitions, .no-transitions * { transition: none !important; }
+
+/* ── Controls ── */
+.controls {
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 24px; border-radius: 8px;
+  margin-top: -10px;
+}
+.controls button {
+  background: #2a2a4a; color: var(--text); border: 1px solid #444;
+  padding: 8px 16px; border-radius: 6px; cursor: pointer; font-size: 14px;
+  transition: all 0.15s; user-select: none;
+}
+#btn-play { min-width: 100px; height: 35px; }
+.controls button:hover:not(:disabled) { background: #3a3a5a; border-color: #666; }
+.controls button:disabled { opacity: 0.4; cursor: default; }
+#speed { width: 100px; accent-color: var(--accent); }
+.controls label { font-size: 14px; color: #aaa; display: flex; align-items: center; gap: 6px; }
+#speed-val { display: inline-block; width: 36px; text-align: right; }
+
+/* ── Responsive ── */
+@media (max-width: 900px) {
+  .scene-tabs { flex-wrap: wrap; }
+  .scene-tab { min-width: 0; flex: 1 1 100%; padding: 8px 12px; font-size: 14px; }
+  .scene-tab code { font-size: 10px; }
+  #step-panel { position: static !important; width: auto !important; left: auto !important; top: auto !important; margin: 0; }
+  .controls { flex-wrap: wrap; gap: 8px; padding: 8px 12px; justify-content: center; margin-top: 0; }
+  .controls button { padding: 6px 10px; font-size: 13px; }
+  #btn-play { min-width: 80px; height: 32px; }
+  #speed { width: 80px; }
+}
+</style>
+</head>
+<body>
+
+<div class="scene-tabs">
+  <button class="scene-tab active" data-scene="arrow">
+    <strong>Arrow buffers</strong>
+    <code>1 column -&gt; 5 arrays on disk</code>
+  </button>
+  <button class="scene-tab" data-scene="fullzip">
+    <strong>Lance: full zip</strong>
+    <code>values over ~128 B</code>
+  </button>
+  <button class="scene-tab" data-scene="miniblock">
+    <strong>Lance: miniblock</strong>
+    <code>values under ~128 B</code>
+  </button>
+</div>
+
+<div id="canvas-wrapper">
+<div id="canvas">
+  <div class="col-title" id="scene-title" style="left:320px"></div>
+  <div class="note" id="scene-note" style="left:320px;top:272px"></div>
+
+  <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
+
+  <div id="step-panel">
+    <div class="sp-query" id="sp-query"></div>
+    <div class="sp-step" id="sp-step"></div>
+    <div class="sp-label" id="sp-label">Press Play to begin</div>
+    <hr class="sp-sep">
+    <div class="sp-desc" id="sp-desc"></div>
+    <div class="sp-insight" id="sp-insight"></div>
+    <div class="sp-stats" id="sp-stats"></div>
+  </div>
+</div>
+</div>
+
+<div class="controls">
+  <button id="btn-prev" title="Previous step (&#8592;)">&#9664; Prev</button>
+  <button id="btn-play">&#9208; Pause</button>
+  <button id="btn-next" title="Next step (&#8594;)">Next &#9654;</button>
+  <button id="btn-reset">&#8634; Reset</button>
+  <label>Speed: <span id="speed-val">1&times;</span>
+    <input type="range" id="speed" min="0.25" max="3" step="0.25" value="1">
+  </label>
+</div>
+
+<script>
+(function() {
+'use strict';
+
+// --- Config ---
+
+const BX = 60, BW = 520, CANVAS_W = 1200;
+const BX_M = 20, BW_M = 420, CANVAS_W_M = 500;
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+const C = {
+  A: 'rgba(139,233,253,0.85)', B: 'rgba(255,184,108,0.85)',
+  C: 'rgba(80,250,123,0.85)',  M: 'rgba(255,85,85,0.85)',
+  I: 'rgba(189,147,249,0.85)', H: 'rgba(98,114,164,0.85)',
+};
+const LIGHT_BG = new Set([C.A, C.B, C.C]);
+
+const SCENES = {
+
+  arrow: {
+    title: 'Apache Arrow style',
+    sql: 'get row 900 of a List<String> column',
+    note: 'one logical column, five physical arrays',
+    blocks: [
+      { id: 'a-rv', label: '1. row is null?  (1 bit / row)',        color: C.A, y: 40,  h: 34 },
+      { id: 'a-lo', label: '2. where each row\'s list starts',      color: C.B, y: 84,  h: 34 },
+      { id: 'a-sv', label: '3. string is null?  (1 bit / string)',  color: C.A, y: 128, h: 34 },
+      { id: 'a-so', label: '4. where each string starts',           color: C.B, y: 172, h: 34 },
+      { id: 'a-by', label: '5. the text bytes',                     color: C.C, y: 216, h: 34 },
+    ],
+    steps: [
+      { label: 'Round trip 1', dur: 2600,
+        desc: 'We start by reading the null bit of row 900, and the list offsets that belong to it.\n\nNow we know the row isn\'t null, and that its list covers strings 1801 and 1802.',
+        read: ['a-rv', 'a-lo'], slice: [0.42, 0.5],
+        skip: ['a-sv','a-so','a-by'],
+        stats: { reads: 2, trips: 1 } },
+      { label: 'Round trip 2', dur: 2600,
+        desc: 'Only now do we know which strings we actually need, so we go read their null bits and their offsets.\n\nThose offsets finally tell us that the text we\'re after sits at bytes 92,144 to 92,161.',
+        read: ['a-sv', 'a-so'], slice: [0.42, 0.5],
+        skip: ['a-by'],
+        seeks: [
+          { from: 'a-lo', to: 'a-sv', color: '#ff5555', bend: 34 },
+          { from: 'a-lo', to: 'a-so', color: '#ff5555', bend: 72 },
+        ],
+        stats: { reads: 4, trips: 2 } },
+      { label: 'Round trip 3', dur: 2400,
+        desc: 'And only now can we read the text itself.\n\nEvery read had to wait for the previous one to tell it where to go.',
+        read: ['a-by'], slice: [0.42, 0.5],
+        seeks: [{ from: 'a-so', to: 'a-by', color: '#ff5555', bend: 34 }],
+        stats: { reads: 5, trips: 3 } },
+      { label: 'Result', dur: 2600, fadeArrows: true,
+        desc: '5 reads that can\'t run in parallel, meaning we paid 3 round trips of latency for a single row.\n\nAnd every level of nesting we add costs us another one.',
+        insight: 'In memory this layout is completely fine, following a pointer is free. Arrow was designed for RAM, and you really feel it on disk.',
+        stats: { reads: 5, trips: 3 } },
+    ],
+  },
+
+  fullzip: {
+    title: 'Lance: full zip',
+    sql: 'get row 900 of a List<String> column',
+    note: 'inside one column, everything belonging to a row sits together',
+    blocks: [
+      { id: 'z-idx', label: 'repetition index (tiny, in memory)', color: C.I, y: 40,  h: 26 },
+      { id: 'z-898', label: 'row 898  | ctrl | len | text | ...',  color: C.H, y: 82,  h: 32 },
+      { id: 'z-899', label: 'row 899  | ctrl | len | text | ...',  color: C.H, y: 118, h: 32 },
+      { id: 'z-900', label: 'row 900  | ctrl | len | text | ...',  color: C.B, y: 154, h: 32 },
+      { id: 'z-901', label: 'row 901  | ctrl | len | text | ...',  color: C.H, y: 190, h: 32 },
+      { id: 'z-902', label: 'row 902  | ctrl | len | text | ...',  color: C.H, y: 226, h: 32 },
+    ],
+    steps: [
+      { label: 'Find the row', dur: 2600,
+        desc: 'When the values are fixed size, we don\'t look up anything at all, row 900 simply starts at 900 x size.\n\nOur strings are variable sized, so we do one small lookup in the repetition index to know where the row begins.',
+        read: ['z-idx'],
+        skip: ['z-898','z-899','z-900','z-901','z-902'],
+        stats: { reads: 0, trips: 0 } },
+      { label: 'One read', dur: 2800,
+        desc: 'Now we simply read row 900.\n\nThe 5 arrays of the column are interleaved, so the null flags, the list structure, the string lengths and the text of a single row all sit together, and one read gets us all of them, no matter how nested the type is.\n\nThe other columns still live somewhere else, this is not a row store.',
+        read: ['z-900'],
+        skip: ['z-898','z-899','z-901','z-902'],
+        seek: { from: 'z-idx', to: 'z-900', color: '#00e676' },
+        stats: { reads: 1, trips: 1 } },
+      { label: 'Decode', dur: 2600, fadeArrows: true,
+        desc: 'Every value carries a 1 byte control word in front of it, telling us whether it\'s null, and whether it starts a new list.\n\nThat single byte does the job of the 4 structure arrays we had before.',
+        read: ['z-900'],
+        stats: { reads: 1, trips: 1 } },
+      { label: 'The trade-off', dur: 3000,
+        desc: 'It isn\'t free though. That 1 byte on top of an 8 byte int is 12% wasted, and reading value by value means we can\'t decode with SIMD.\n\nWhich is why Lance only stores wide values this way: vectors, images, and long text.',
+        insight: 'The compression is still columnar, each array is compressed on its own, and only then interleaved. Columnar compression ratio, row major layout.',
+        stats: { reads: 1, trips: 1 } },
+    ],
+  },
+
+  miniblock: {
+    title: 'Lance: miniblock',
+    sql: 'get row 900 of an int64 column',
+    note: 'small values stay columnar, inside small chunks',
+    blocks: [
+      { id: 'm-idx', label: 'chunk index (tiny, in memory)', color: C.I, y: 40,  h: 26 },
+      { id: 'm-c0',  label: 'chunk 0  - 1024 values (4 KiB)', color: C.H, y: 82,  h: 32 },
+      { id: 'm-c1',  label: 'chunk 1  - 1024 values (4 KiB)', color: C.H, y: 118, h: 32 },
+      { id: 'm-c2',  label: 'chunk 2  - 1024 values (4 KiB)', color: C.H, y: 154, h: 32 },
+      { id: 'm-c3',  label: 'chunk 3  - 1024 values (4 KiB)', color: C.A, y: 190, h: 32 },
+      { id: 'm-c4',  label: 'chunk 4  - 1024 values (4 KiB)', color: C.H, y: 226, h: 32 },
+    ],
+    steps: [
+      { label: 'Find the chunk', dur: 2600,
+        desc: 'An int64 is just 8 bytes, so giving every value its own address would cost us more than the value itself.\n\nInstead Lance groups them into 4-8 KiB chunks, and a tiny index in memory tells us that row 900 is in chunk 3.',
+        read: ['m-idx'],
+        skip: ['m-c0','m-c1','m-c2','m-c3','m-c4'],
+        stats: { reads: 0, trips: 0 } },
+      { label: 'Read one chunk', dur: 2800,
+        desc: 'We read the whole chunk, around 4 KiB.\n\nInside it the layout is still columnar, so we end up decoding all 1024 values just to get the one we wanted. It is wasteful, but wasting 4 KiB is something we can live with.',
+        read: ['m-c3'],
+        skip: ['m-c0','m-c1','m-c2','m-c4'],
+        seek: { from: 'm-idx', to: 'm-c3', color: '#00e676' },
+        stats: { reads: 1, trips: 1 } },
+      { label: 'Why not full zip?', dur: 3000, fadeArrows: true,
+        desc: 'Two reasons. A 1 byte control word on an 8 byte value is 12% overhead, and interleaving would force us to decode value by value.\n\nA columnar chunk instead lets the CPU chew through 1000 values at once with SIMD.',
+        read: ['m-c3'],
+        stats: { reads: 1, trips: 1 } },
+      { label: 'The rule', dur: 3000,
+        desc: 'So small values go to miniblock and pay a little waste on every read, while big values go to full zip and pay a little overhead on every value.\n\nLance decides per column, and the line sits at around 128 bytes.',
+        insight: 'The paper takes it one step further: there is no single correct structural encoding, so a format shouldn\'t hardcode one.',
+        stats: { reads: 1, trips: 1 } },
+    ],
+  },
+};
+
+// --- State & DOM ---
+
+const state = { scene: 'arrow', phase: 'idle', step: -1, elapsed: 0, speed: 1, lastTs: 0 };
+let ready = false, currentMobile = null;
+const $ = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+
+const canvas = $('#canvas');
+const svgEl = $('#svg');
+const titleEl = $('#scene-title');
+const noteEl = $('#scene-note');
+const panel = {
+  query: $('#sp-query'), step: $('#sp-step'), label: $('#sp-label'),
+  desc: $('#sp-desc'), insight: $('#sp-insight'), stats: $('#sp-stats'),
+};
+const btn = { play: $('#btn-play'), reset: $('#btn-reset'), prev: $('#btn-prev'), next: $('#btn-next') };
+
+// --- Blocks ---
+
+let blocks = {};
+const svgDyn = [];
+let curX = BX, curW = BW;
+
+function getScene() { return SCENES[state.scene]; }
+
+function createBlock(def, x, w) {
+  const el = document.createElement('div');
+  el.className = 'block';
+  Object.assign(el.style, {
+    left: x + 'px', top: def.y + 'px', width: w + 'px', height: def.h + 'px',
+    background: def.color, fontSize: (def.h < 30 ? 11 : 12) + 'px',
+    color: LIGHT_BG.has(def.color) ? 'rgba(0,0,0,0.95)' : 'rgba(255,255,255,0.95)',
+  });
+  el.textContent = def.label;
+  canvas.appendChild(el);
+  blocks[def.id] = { el, x, y: def.y, w, h: def.h };
+}
+
+function buildScene() {
+  Object.values(blocks).forEach(b => b.el.remove());
+  blocks = {};
+  const scene = getScene();
+  scene.blocks.forEach(def => createBlock(def, curX, curW));
+  titleEl.textContent = scene.title;
+  noteEl.textContent = scene.note;
+  titleEl.style.left = (curX + curW / 2) + 'px';
+  noteEl.style.left = (curX + curW / 2) + 'px';
+  measureScenePanel();
+}
+
+// The panel is sized to the tallest step of the scene, so neither the text box
+// nor the buttons under it jump around while stepping through.
+let panelMax = 0;
+
+function measureScenePanel() {
+  const keepDesc = panel.desc.textContent, keepInsight = panel.insight.textContent;
+  panel.desc.style.height = 'auto';
+  panelMax = 0;
+  Object.values(SCENES).forEach(sc => sc.steps.forEach(s => {
+    panel.desc.textContent = s.desc;
+    panel.insight.textContent = s.insight || '';
+    panelMax = Math.max(panelMax, panel.desc.offsetHeight + panel.insight.offsetHeight);
+  }));
+  panel.desc.textContent = keepDesc;
+  panel.insight.textContent = keepInsight;
+  fitPanel();
+}
+
+// On desktop the panel sits next to the diagram, so we pad it to the tallest
+// step to keep the buttons still. On mobile the panel is above the buttons, and
+// padding it would waste a lot of space, so we let it grow and the buttons move.
+function fitPanel() {
+  if (currentMobile || !panelMax) {
+    panel.desc.style.height = 'auto';
+    return;
+  }
+  panel.desc.style.height = Math.max(0, panelMax - panel.insight.offsetHeight) + 'px';
+}
+
+// --- Block State ---
+
+function applySliceMasks(b, slice) {
+  const mL = document.createElement('div');
+  mL.className = 'partial-mask';
+  Object.assign(mL.style, { left: '-2px', right: 'auto', width: (slice[0] * 100) + '%', borderRadius: '5px 0 0 5px' });
+  b.el.appendChild(mL);
+
+  const mR = document.createElement('div');
+  mR.className = 'partial-mask';
+  mR.style.left = (slice[1] * 100) + '%';
+  b.el.appendChild(mR);
+}
+
+function setBlockState(id, newState, slice) {
+  const b = blocks[id];
+  if (!b) return;
+
+  if (newState === 'skipped') {
+    if (!b.el.classList.contains('reading') && !b.el.classList.contains('completed')) {
+      b.el.classList.add('skipped');
+    }
+    return;
+  }
+
+  const stayingSame = (newState === 'reading' && b.el.classList.contains('reading'))
+                   || (newState === 'completed' && b.el.classList.contains('completed'));
+
+  b.el.querySelectorAll('.partial-mask').forEach(m => m.remove());
+
+  if (slice) b.slice = slice;
+  if (newState === 'idle') b.slice = null;
+
+  if (!stayingSame) b.el.classList.remove('reading', 'completed', 'skipped');
+
+  if (newState === 'reading') {
+    if (!stayingSame) b.el.classList.add('reading');
+    if (slice) applySliceMasks(b, slice);
+  } else if (newState === 'completed') {
+    if (!stayingSame) b.el.classList.add('completed');
+    if (b.slice) applySliceMasks(b, b.slice);
+  }
+}
+
+function resetAllBlocks() {
+  Object.keys(blocks).forEach(id => setBlockState(id, 'idle'));
+}
+
+// --- SVG ---
+
+function svgCreate(tag, attrs) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+}
+
+function clearSvg() {
+  svgDyn.forEach(el => el.remove());
+  svgDyn.length = 0;
+}
+
+function fadePreviousArrows() {
+  svgDyn.forEach(el => {
+    if (el.classList.contains('arrow-path') || el.classList.contains('arrow-head')) {
+      el.style.opacity = '';
+      el.style.transition = '';
+      el.classList.add('faded');
+    }
+  });
+}
+
+function addArrow(fromId, toId, color, animate, bend) {
+  const fb = blocks[fromId], tb = blocks[toId];
+  if (!fb || !tb) return;
+  const x1 = fb.x + fb.w, y1 = fb.y + fb.h / 2;
+  const x2 = tb.x + tb.w, y2 = tb.y + tb.h / 2;
+  const cpx = Math.max(x1, x2) + (bend || 40) * (currentMobile ? 0.45 : 1);
+  const cpy1 = y1 + (y2 - y1) * 0.3, cpy2 = y1 + (y2 - y1) * 0.7;
+
+  const path = svgCreate('path', {
+    d: `M${x1} ${y1} C${cpx} ${cpy1},${cpx} ${cpy2},${x2} ${y2}`,
+    stroke: color, 'stroke-width': '2.5', 'stroke-linecap': 'round', fill: 'none',
+  });
+  path.classList.add('arrow-path');
+  svgEl.appendChild(path);
+
+  const ang = Math.atan2(y2 - cpy2, x2 - cpx), s = 10;
+  const pts = [
+    x2, y2,
+    x2 - s * Math.cos(ang - 0.4), y2 - s * Math.sin(ang - 0.4),
+    x2 - s * Math.cos(ang + 0.4), y2 - s * Math.sin(ang + 0.4),
+  ].join(',');
+  const head = svgCreate('polygon', { points: pts, fill: color });
+  head.classList.add('arrow-head');
+  svgEl.appendChild(head);
+  svgDyn.push(path, head);
+
+  if (animate !== false) {
+    const len = path.getTotalLength();
+    path.style.strokeDasharray = len;
+    path.style.strokeDashoffset = len;
+    head.style.opacity = '0';
+    path.getBoundingClientRect();
+    path.style.transition = 'stroke-dashoffset 700ms ease-out';
+    path.style.strokeDashoffset = '0';
+    setTimeout(() => {
+      if (head.classList.contains('faded')) return;
+      head.style.transition = 'opacity 200ms ease-in';
+      head.style.opacity = '1';
+    }, 520);
+  }
+}
+
+// --- Animation Engine ---
+
+function resetVisuals() {
+  resetAllBlocks();
+  clearSvg();
+}
+
+function reset() {
+  Object.assign(state, { phase: 'idle', step: -1, elapsed: 0, lastTs: 0 });
+  resetVisuals();
+  panel.query.textContent = '';
+  panel.step.textContent = '';
+  panel.label.textContent = 'Press Play to begin';
+  panel.desc.textContent = '';
+  panel.insight.textContent = '';
+  panel.stats.innerHTML = '';
+  updateControls();
+}
+
+function updatePanel(idx) {
+  const scene = getScene(), step = scene.steps[idx];
+  panel.query.textContent = scene.sql;
+  panel.step.textContent = `Step ${idx + 1} / ${scene.steps.length}`;
+  panel.label.textContent = step.label;
+  panel.desc.textContent = step.desc;
+  panel.insight.textContent = step.insight || '';
+  const st = step.stats;
+  panel.stats.innerHTML = st
+    ? `<span>disk reads: <b>${st.reads}</b></span><span>round trips: <b>${st.trips}</b></span>`
+    : '';
+  fitPanel();
+  if (ready) scaleCanvas();
+}
+
+function applyStepEffects(idx, animate) {
+  const step = getScene().steps[idx];
+  if (step.skip) step.skip.forEach(id => setBlockState(id, 'skipped'));
+  if (step.read) step.read.forEach(id => setBlockState(id, 'reading', step.slice || null));
+  const seeks = step.seeks || (step.seek ? [step.seek] : []);
+  seeks.forEach(s => addArrow(s.from, s.to, s.color || '#bd93f9', animate, s.bend));
+}
+
+function markStepCompleted(idx) {
+  const step = getScene().steps[idx];
+  if (step.read) step.read.forEach(id => setBlockState(id, 'completed'));
+}
+
+function stepHasNewArrows(step) { return step.fadeArrows || !!step.seek || !!step.seeks; }
+
+function beginStep(idx) {
+  const scene = getScene();
+  if (idx >= scene.steps.length) {
+    if (idx > 0) markStepCompleted(idx - 1);
+    state.phase = 'finished';
+    updateControls();
+    return;
+  }
+
+  const step = scene.steps[idx];
+  if (idx > 0) {
+    const continuing = new Set(step.read || []);
+    const prev = scene.steps[idx - 1];
+    if (prev.read) prev.read.forEach(id => {
+      if (!continuing.has(id)) setBlockState(id, 'completed');
+    });
+  }
+
+  if (stepHasNewArrows(step)) fadePreviousArrows();
+  state.step = idx;
+  state.elapsed = 0;
+  updatePanel(idx);
+  applyStepEffects(idx, true);
+}
+
+function jumpToStep(targetIdx, instant) {
+  const scene = getScene();
+  if (targetIdx < 0 || targetIdx >= scene.steps.length) return;
+
+  canvas.classList.add('no-transitions');
+  resetVisuals();
+
+  for (let i = 0; i < targetIdx; i++) {
+    applyStepEffects(i, false);
+    markStepCompleted(i);
+    const next = scene.steps[i + 1];
+    if (next && stepHasNewArrows(next)) fadePreviousArrows();
+  }
+
+  if (!instant) { canvas.classList.remove('no-transitions'); document.body.offsetHeight; }
+
+  state.step = targetIdx;
+  state.elapsed = 0;
+  updatePanel(targetIdx);
+  applyStepEffects(targetIdx, !instant);
+
+  if (instant) { canvas.classList.remove('no-transitions'); document.body.offsetHeight; }
+
+  state.phase = 'paused';
+  updateControls();
+}
+
+function tick(ts) {
+  if (state.phase === 'playing') {
+    if (!state.lastTs) state.lastTs = ts;
+    state.elapsed += Math.min(ts - state.lastTs, 200) * state.speed;
+    state.lastTs = ts;
+    const scene = getScene();
+    if (state.step >= 0 && state.step < scene.steps.length && state.elapsed >= scene.steps[state.step].dur) {
+      beginStep(state.step + 1);
+    }
+  } else {
+    state.lastTs = 0;
+  }
+  requestAnimationFrame(tick);
+}
+
+// --- Controls ---
+
+function updateControls() {
+  btn.play.disabled = (state.phase === 'finished');
+  btn.play.textContent = state.phase === 'playing' ? '\u23F8 Pause'
+    : state.phase === 'paused' ? '\u25B6 Resume' : '\u25B6 Play';
+  btn.prev.disabled = (state.phase === 'idle') || (state.step <= 0 && state.phase !== 'finished');
+  btn.next.disabled = (state.phase === 'finished') || (state.phase !== 'idle' && state.step >= getScene().steps.length - 1);
+}
+
+$$('.scene-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    $$('.scene-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    state.scene = tab.dataset.scene;
+    reset();
+    canvas.classList.add('no-transitions');
+    buildScene();
+    jumpToStep(0, true);
+  });
+});
+
+btn.play.addEventListener('click', () => {
+  if (state.phase === 'playing') {
+    state.phase = 'paused';
+  } else if (state.phase === 'idle' || state.phase === 'finished') {
+    reset();
+    state.phase = 'playing';
+    beginStep(0);
+  } else {
+    state.phase = 'playing';
+  }
+  updateControls();
+});
+
+btn.reset.addEventListener('click', reset);
+
+btn.prev.addEventListener('click', () => {
+  if (state.phase === 'idle') return;
+  jumpToStep(state.phase === 'finished' ? getScene().steps.length - 1 : state.step - 1);
+});
+
+btn.next.addEventListener('click', () => {
+  if (state.phase === 'idle') {
+    state.phase = 'paused';
+    beginStep(0);
+  } else if (state.step < getScene().steps.length - 1) {
+    state.phase = 'paused';
+    beginStep(state.step + 1);
+  }
+  updateControls();
+});
+
+document.addEventListener('keydown', e => {
+  const actions = { ArrowLeft: btn.prev, ArrowRight: btn.next, ' ': btn.play };
+  if (actions[e.key]) { actions[e.key].click(); e.preventDefault(); }
+});
+
+$('#speed').addEventListener('input', function() {
+  state.speed = parseFloat(this.value);
+  $('#speed-val').textContent = state.speed + '\u00d7';
+});
+
+// --- Init ---
+
+buildScene();
+requestAnimationFrame(tick);
+jumpToStep(0);
+
+function setLayout(mobile) {
+  if (mobile === currentMobile) return;
+  currentMobile = mobile;
+  curX = mobile ? BX_M : BX;
+  curW = mobile ? BW_M : BW;
+  canvas.style.width = (mobile ? CANVAS_W_M : CANVAS_W) + 'px';
+  Object.values(blocks).forEach(b => {
+    b.x = curX; b.w = curW;
+    b.el.style.left = curX + 'px';
+    b.el.style.width = curW + 'px';
+  });
+  titleEl.style.left = (curX + curW / 2) + 'px';
+  noteEl.style.left = (curX + curW / 2) + 'px';
+  clearSvg();
+  if (state.step >= 0 && state.phase !== 'idle') {
+    const ph = state.phase;
+    jumpToStep(state.step);
+    if (ph === 'playing') { state.phase = 'playing'; updateControls(); }
+  }
+}
+
+const wrapper = $('#canvas-wrapper');
+const panelEl = $('#step-panel');
+const controlsEl = $('.controls');
+let lastPanelW = 0;
+function scaleCanvas() {
+  const mobile = window.innerWidth <= 900;
+  setLayout(mobile);
+  if (mobile && panelEl.parentElement === canvas) {
+    controlsEl.parentElement.insertBefore(panelEl, controlsEl);
+  } else if (!mobile && panelEl.parentElement !== canvas) {
+    canvas.appendChild(panelEl);
+  }
+  if (panelEl.clientWidth !== lastPanelW) {
+    lastPanelW = panelEl.clientWidth;
+    measureScenePanel();
+  }
+  const cw = mobile ? CANVAS_W_M : CANVAS_W;
+  const ch = mobile ? 300 : Math.max(300, panelEl.offsetTop + panelEl.offsetHeight + 20);
+  const scale = wrapper.clientWidth / cw;
+  canvas.style.height = ch + 'px';
+  canvas.style.transform = `scale(${scale})`;
+  wrapper.style.height = (ch * scale) + 'px';
+}
+ready = true;
+new ResizeObserver(scaleCanvas).observe(wrapper);
+scaleCanvas();
+if (window.frameElement) {
+  let lastH = 0;
+  new ResizeObserver(() => {
+    const h = document.body.scrollHeight;
+    if (h !== lastH) { lastH = h; window.frameElement.style.height = h + 'px'; }
+  }).observe(document.body);
+}
+
+})();
+</script>
+</body>
+</html>
