@@ -35,6 +35,8 @@ Official docs <a href="https://lance.org/format/file/">here</a>.
 
 > Numbers are not exactly real, and should only serve as an order of magnitude estimation to build intution.
 >
+> Real files are messier. Each column gets a different chunk/page size, and a different number of them: a `bool` column can be a few KB, an embedding column hundreds of MB. The two formats also don't cut a column into the same number of parts.
+>
 > Something interesting to test is how would Parquet behave if we configure it to store each page as 64kb instead of the default 1mb 🤔.
 
 # Lance table format

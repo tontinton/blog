@@ -181,7 +181,7 @@ body {
 <div id="canvas">
   <div class="col-title" style="left:220px">Apache Parquet</div>
   <div class="col-title" style="left:980px">Lance</div>
-  <div class="note" style="left:980px;top:425px">(no row groups)</div>
+  <div class="note" style="left:980px;top:380px">(no row groups, pages are mixed)</div>
   <div class="io-label" id="io-random" style="left:388px;top:206px;color:var(--red)">Random<br>I/O</div>
   <div class="io-label" id="io-seq" style="left:1158px;top:146px;color:var(--green)">Seq.<br>I/O</div>
 
@@ -236,15 +236,15 @@ const LIGHT_BG = new Set([C.A, C.B, C.C]);
 
 const PARQUET = [
   { id: 'pq-hdr',  label: 'PAR1 Header (4 B)',            color: C.H, y: 29,  h: 19 },
-  { id: 'pq-r1a',  label: 'Col A Chunk (~8 MB)', color: C.A, y: 55,  h: 31 },
-  { id: 'pq-r1b',  label: 'Col B Chunk (~8 MB)', color: C.B, y: 88,  h: 31 },
-  { id: 'pq-r1c',  label: 'Col C Chunk (~8 MB)', color: C.C, y: 121, h: 31 },
-  { id: 'pq-r2a',  label: 'Col A Chunk (~8 MB)',         color: C.A, y: 160, h: 31 },
-  { id: 'pq-r2b',  label: 'Col B Chunk (~8 MB)',         color: C.B, y: 193, h: 31 },
-  { id: 'pq-r2c',  label: 'Col C Chunk (~8 MB)',         color: C.C, y: 226, h: 31 },
-  { id: 'pq-r3a',  label: 'Col A Chunk (~8 MB)',         color: C.A, y: 265, h: 31 },
-  { id: 'pq-r3b',  label: 'Col B Chunk (~8 MB)',         color: C.B, y: 298, h: 31 },
-  { id: 'pq-r3c',  label: 'Col C Chunk (~8 MB)',         color: C.C, y: 331, h: 31 },
+  { id: 'pq-r1a',  label: 'Col A Chunk (~0.3 MB, int64)', color: C.A, y: 55,  h: 31 },
+  { id: 'pq-r1b',  label: 'Col B Chunk (~8 MB, string)',   color: C.B, y: 88,  h: 31 },
+  { id: 'pq-r1c',  label: 'Col C Chunk (~11 MB, vector)',  color: C.C, y: 121, h: 31 },
+  { id: 'pq-r2a',  label: 'Col A Chunk (~0.3 MB, int64)', color: C.A, y: 160, h: 31 },
+  { id: 'pq-r2b',  label: 'Col B Chunk (~8 MB, string)',   color: C.B, y: 193, h: 31 },
+  { id: 'pq-r2c',  label: 'Col C Chunk (~11 MB, vector)',  color: C.C, y: 226, h: 31 },
+  { id: 'pq-r3a',  label: 'Col A Chunk (~0.3 MB, int64)', color: C.A, y: 265, h: 31 },
+  { id: 'pq-r3b',  label: 'Col B Chunk (~8 MB, string)',   color: C.B, y: 298, h: 31 },
+  { id: 'pq-r3c',  label: 'Col C Chunk (~11 MB, vector)',  color: C.C, y: 331, h: 31 },
   { id: 'pq-pidx', label: 'Page Index (~20 KB)',         color: C.I, y: 371, h: 22 },
   { id: 'pq-meta', label: 'File Metadata (~10 KB)',      color: C.M, y: 396, h: 22 },
   { id: 'pq-mlen', label: 'Metadata Length (4 B)',        color: C.H, y: 422, h: 17 },
@@ -252,18 +252,17 @@ const PARQUET = [
 ];
 
 const LANCE = [
-  { id: 'ln-a1', label: 'Col A - Page 1 (~8 MB)', color: C.A, y: 29,  h: 31 },
-  { id: 'ln-a2', label: 'Col A - Page 2 (~8 MB)', color: C.A, y: 62,  h: 31 },
-  { id: 'ln-a3', label: 'Col A - Page 3 (~8 MB)', color: C.A, y: 95,  h: 31 },
-  { id: 'ln-b1', label: 'Col B - Page 1 (~8 MB)', color: C.B, y: 135, h: 31 },
-  { id: 'ln-b2', label: 'Col B - Page 2 (~8 MB)', color: C.B, y: 168, h: 31 },
-  { id: 'ln-b3', label: 'Col B - Page 3 (~8 MB)', color: C.B, y: 201, h: 31 },
-  { id: 'ln-c1', label: 'Col C - Page 1 (~8 MB)', color: C.C, y: 241, h: 31 },
-  { id: 'ln-c2', label: 'Col C - Page 2 (~8 MB)', color: C.C, y: 274, h: 31 },
-  { id: 'ln-c3', label: 'Col C - Page 3 (~8 MB)', color: C.C, y: 307, h: 31 },
-  { id: 'ln-cm', label: 'Column Metadata (~4 KB)', color: C.M, y: 347, h: 22 },
-  { id: 'ln-ot', label: 'Offset Tables (~200 B)',  color: C.I, y: 373, h: 22 },
-  { id: 'ln-ft', label: 'Footer (40 B)',            color: C.H, y: 398, h: 19 },
+  { id: 'ln-c1', label: 'Col C - Page 1 (~8 MB, vector)', color: C.C, y: 29,  h: 31 },
+  { id: 'ln-b1', label: 'Col B - Page 1 (~8 MB, string)', color: C.B, y: 62,  h: 31 },
+  { id: 'ln-c2', label: 'Col C - Page 2 (~8 MB, vector)', color: C.C, y: 95,  h: 31 },
+  { id: 'ln-c3', label: 'Col C - Page 3 (~8 MB, vector)', color: C.C, y: 128, h: 31 },
+  { id: 'ln-b2', label: 'Col B - Page 2 (~8 MB, string)', color: C.B, y: 161, h: 31 },
+  { id: 'ln-c4', label: 'Col C - Page 4 (~8 MB, vector)', color: C.C, y: 194, h: 31 },
+  { id: 'ln-b3', label: 'Col B - Page 3 (~8 MB, string)', color: C.B, y: 227, h: 31 },
+  { id: 'ln-a1', label: 'Col A - Page 1 (~1 MB, int64)',  color: C.A, y: 260, h: 31 },
+  { id: 'ln-cm', label: 'Column Metadata (~4 KB)', color: C.M, y: 300, h: 22 },
+  { id: 'ln-ot', label: 'Offset Tables (~200 B)',  color: C.I, y: 326, h: 22 },
+  { id: 'ln-ft', label: 'Footer (40 B)',            color: C.H, y: 351, h: 19 },
 ];
 
 const ROW_GROUPS = [
@@ -283,12 +282,12 @@ const QUERIES = {
         pq: { desc: 'Fetch the Thrift-encoded file metadata (TCompactProtocol). It is one blob including: schema, row group boundaries, and column chunk offsets for every column (even though we only need Col B).', read: ['pq-meta'],
               skip: ['pq-hdr','pq-r1a','pq-r1b','pq-r1c','pq-r2a','pq-r2b','pq-r2c','pq-r3a','pq-r3b','pq-r3c','pq-pidx'] },
         ln: { desc: 'Read the offset table, then just Col B\'s column metadata (protobuf). Lance stores metadata per-column, so we skip everything we don\'t need.', read: ['ln-ot', 'ln-cm'],
-              skip: ['ln-a1','ln-a2','ln-a3','ln-b1','ln-b2','ln-b3','ln-c1','ln-c2','ln-c3'] } },
+              skip: ['ln-a1','ln-b1','ln-b2','ln-b3','ln-c1','ln-c2','ln-c3','ln-c4'] } },
       { label: 'Locate Target', dur: 1800,
         pq: { desc: 'Read the page index (optional in Parquet). It has row counts and byte offsets for each page, so we can figure out which page in RG1 contains row 100. If the page index doesn\'t exist, we simply search the row in all pages.', read: ['pq-pidx'],
               skip: ['pq-hdr','pq-r1a','pq-r1b','pq-r1c','pq-r2a','pq-r2b','pq-r2c','pq-r3a','pq-r3b','pq-r3c'] },
         ln: { desc: 'Each page stores its row count in the metadata we already have. Simple math tells us row 100 is in page 1. No extra I/O.',
-              skip: ['ln-a1','ln-a2','ln-a3','ln-b1','ln-b2','ln-b3','ln-c1','ln-c2','ln-c3'] } },
+              skip: ['ln-a1','ln-b1','ln-b2','ln-b3','ln-c1','ln-c2','ln-c3','ln-c4'] } },
       { label: 'Read Target Data', dur: 2200,
         pq: { desc: 'Page index told us which page has row 100. Seek into Col B\'s chunk and read that one page (~1 MB).', read: ['pq-r1b'],
               slice: [0.51, 0.75],
@@ -296,7 +295,7 @@ const QUERIES = {
               seek: { from: 'pq-pidx', to: 'pq-r1b' } },
         ln: { desc: 'Seek to Col B page 1. Metadata includes encoding info per page, so the reader can compute the exact byte range for row 100, and is just a ~64 KB read.', read: ['ln-b1'],
               slice: [0.34, 0.37],
-              skip: ['ln-a1','ln-a2','ln-a3','ln-b2','ln-b3','ln-c1','ln-c2','ln-c3','ln-ot'],
+              skip: ['ln-a1','ln-b2','ln-b3','ln-c1','ln-c2','ln-c3','ln-c4','ln-ot'],
               seek: { from: 'ln-cm', to: 'ln-b1', color: '#00e676' } } },
       { label: 'Decompressing Page...', dur: 2000, fadeArrows: true,
         pq: { desc: 'Each page is compressed, and must be decompressed as one unit. A page includes: nullability flags, nesting info, and all values are packed together. No way to jump to row 100 directly.', read: ['pq-r1b'], slice: [0.51, 0.75] },
@@ -315,32 +314,32 @@ const QUERIES = {
       { label: 'Read Metadata', dur: 1800,
         pq: { desc: 'Fetch the Thrift-encoded file metadata. We have to parse the whole thing just to find Col B\'s chunk offsets.', read: ['pq-meta'],
               skip: ['pq-hdr','pq-r1a','pq-r1b','pq-r1c','pq-r2a','pq-r2b','pq-r2c','pq-r3a','pq-r3b','pq-r3c','pq-pidx'] },
-        ln: { desc: 'Read only Col B\'s column metadata (protobuf): page offsets, buffer sizes, and encodings for all 3 pages.', read: ['ln-cm'],
-              skip: ['ln-a1','ln-a2','ln-a3','ln-b1','ln-b2','ln-b3','ln-c1','ln-c2','ln-c3','ln-ot'] } },
+        ln: { desc: 'Read only Col B\'s column metadata (protobuf): page offsets, buffer sizes, and encodings for its 3 pages. Wide columns get many pages. Col A is small, so it has only 1 page.', read: ['ln-cm'],
+              skip: ['ln-a1','ln-b1','ln-b2','ln-b3','ln-c1','ln-c2','ln-c3','ln-c4','ln-ot'] } },
       { label: 'Read Col B (1/3)', dur: 2000,
         pq: { desc: 'Seek to RG1 and read Col B\'s chunk. In Parquet, different columns live together inside each row group: Col A, Col B, Col C, etc...', read: ['pq-r1b'],
               skip: ['pq-hdr','pq-r1a','pq-r1c','pq-r2a','pq-r2b','pq-r2c','pq-r3a','pq-r3b','pq-r3c','pq-pidx'],
               seek: { from: 'pq-meta', to: 'pq-r1b', color: '#bd93f9' } },
-        ln: { desc: 'Start reading Col B page 1. In Lance, all pages for a column sit together.', read: ['ln-b1'],
-              skip: ['ln-a1','ln-a2','ln-a3','ln-b2','ln-b3','ln-c1','ln-c2','ln-c3','ln-ot'],
+        ln: { desc: 'Read Col B page 1. Lance writes a page as soon as a column\'s buffer is full, so pages of different columns get mixed. Pages of one column are not next to each other.', read: ['ln-b1'],
+              skip: ['ln-a1','ln-b2','ln-b3','ln-c1','ln-c2','ln-c3','ln-c4','ln-ot'],
               seek: { from: 'ln-cm', to: 'ln-b1', color: '#bd93f9' } } },
       { label: 'Read Col B (2/3)', dur: 2000,
         pq: { desc: 'Seek forward, skipping over Col C (RG1) and Col A (RG2) to reach the next Col B chunk.', read: ['pq-r2b'],
               skip: ['pq-hdr','pq-r1a','pq-r1c','pq-r2a','pq-r2c','pq-r3a','pq-r3b','pq-r3c','pq-pidx'],
               seek: { from: 'pq-r1b', to: 'pq-r2b', color: '#bd93f9' } },
-        ln: { desc: 'Keep reading.', read: ['ln-b2'],
-              skip: ['ln-a1','ln-a2','ln-a3','ln-b3','ln-c1','ln-c2','ln-c3','ln-ot'],
+        ln: { desc: 'Seek forward, over 2 Col C pages, to reach Col B page 2.', read: ['ln-b2'],
+              skip: ['ln-a1','ln-b3','ln-c1','ln-c2','ln-c3','ln-c4','ln-ot'],
               seek: { from: 'ln-b1', to: 'ln-b2', color: '#bd93f9' } } },
       { label: 'Read Col B (3/3)', dur: 2000,
         pq: { desc: 'Another seek, skipping Col C (RG2) and Col A (RG3).', read: ['pq-r3b'],
               skip: ['pq-hdr','pq-r1a','pq-r1c','pq-r2a','pq-r2c','pq-r3a','pq-r3c','pq-pidx'],
               seek: { from: 'pq-r2b', to: 'pq-r3b', color: '#bd93f9' } },
-        ln: { desc: 'Read page 3.', read: ['ln-b3'],
-              skip: ['ln-a1','ln-a2','ln-a3','ln-c1','ln-c2','ln-c3','ln-ot'],
+        ln: { desc: 'Seek again, over 1 more Col C page, to Col B page 3.', read: ['ln-b3'],
+              skip: ['ln-a1','ln-c1','ln-c2','ln-c3','ln-c4','ln-ot'],
               seek: { from: 'ln-b2', to: 'ln-b3', color: '#bd93f9' } } },
       { label: 'Completing Scan...', dur: 1800, fadeArrows: true,
-        pq: { desc: 'Done. Performace is roughly similar, as it\'s recommended to fetch chunks in parallel after some threshold (e.g. 8MB) on object storages. It doesn\t matter if the chunks are sequential or not.' },
-        ln: { desc: 'Done.' } },
+        pq: { desc: 'Done. Speed is about the same. On object storage you fetch big chunks (e.g. 8 MB) in parallel anyway, so their order in the file does not matter.' },
+        ln: { desc: 'Done. Lance also seeks, and that is fine. What matters is how many reads you do and how big they are, not their order.' } },
     ],
   },
 };
@@ -756,8 +755,8 @@ $('#speed').addEventListener('input', function() {
 PARQUET.forEach(def => createBlock(def, PQ_X, PQ_W));
 LANCE.forEach(def => createBlock(def, LN_X, LN_W));
 createBrackets();
-addDividers(['pq-r1a','pq-r1b','pq-r1c','pq-r2a','pq-r2b','pq-r2c','pq-r3a','pq-r3b','pq-r3c'], 4);
-addDividers(['ln-a1','ln-a2','ln-a3','ln-b1','ln-b2','ln-b3','ln-c1','ln-c2','ln-c3'], 30);
+addDividers(['pq-r1b','pq-r1c','pq-r2b','pq-r2c','pq-r3b','pq-r3c'], 4);
+addDividers(['ln-b1','ln-b2','ln-b3','ln-c1','ln-c2','ln-c3','ln-c4','ln-a1'], 30);
 requestAnimationFrame(tick);
 jumpToStep(0);
 

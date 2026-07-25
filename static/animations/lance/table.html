@@ -365,7 +365,7 @@ const QUERIES = {
     steps: [
       { label: 'Index Discovery', dur: 1800,
         desc: 'The manifest knows about the indexes. In this example, there\'s a BTree index on col_price, and is identified by some UUID. The index files sit under _indices/{uuid}/ and are split into two parts: page_lookup.lance (the BTree without leafs) and page_data.lance (the tree\'s leaf data).',
-        insight: 'Because index info lives in the manifest, it is known during query planning.',
+        insight: 'The manifest tells the query planner which indexes exist, and if they fit the filter. The index itself is searched later, when the query runs.',
       },
       { label: 'Search page_lookup.lance', dur: 2200,
         desc: 'The BTree (page_lookup.lance) is small enough to stay cached in memory. Each entry just stores the min and max value for a leaf page. A quick binary search for 42.50 lands on page 2: min=32.50, max=48.99.',
