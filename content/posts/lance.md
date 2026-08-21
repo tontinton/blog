@@ -22,7 +22,7 @@ Some big things happened in the *big data over object storage* world in 2025:
 * Datadog bought Quickwit.
 * Databricks bought [Neon](/posts/new-age-data-intensive-apps/#neon).
 
-But something way bigger flew completely under my radar, most likely as I was pretty busy building at <a href="https://vega.io/">$DAY_JOB</a> (some <a href="https://blog.vega.io/posts/partial_stream/">pretty cool stuff</a>, I must say).
+But something way bigger flew completely under my radar, most likely as I was pretty busy building at <a href="https://vega.io/">$DAY_JOB</a> (some <a href="https://vega.io/blog/partial-stream">pretty cool stuff</a>, I must say).
 
 This thing is called <a href="https://lance.org/">Lance</a>. It's a file format (like Apache Parquet), a table format (like Apache Iceberg), and a catalog spec (like Iceberg's REST catalog spec).
 
