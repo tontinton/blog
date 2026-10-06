@@ -77,7 +77,12 @@ facade(g, [0, 2, 10], [20, 30, 10], { every: [3, 3], size: [2, 1], lit: ['window
 truss(g, [0, 1, 0], [0, 30, 0], 'metal');  truss(g, [0, 30, 0], [24, 30, 0], 'metal');   // crane
 stairs(g, [1, 1, 29], '-z', 14, 'plank', { width: 4, side: 'beam' });
 ```
-Interiors: `bed, table, chair, bookshelf, fireplace, crate, barrel, lamppost (as a candle stand)`.
+Interiors: `bed, table, chair, bookshelf, fireplace, crate, barrel, lantern, lamppost (as a candle stand)`.
+Exteriors: `bench, signpost (with text), campfire, bridge, boat, car, well, fence, waterfall`.
+
+### Little people
+`person(g, [x, 1, z], { side: '+z', pose: 'wave', seed: 3 })` — 2×1 footprint, ~7 tall, random skin/shirt/
+pants/hair per seed (or pass ids). Populate scenes sparsely: 3–8 people make a diorama feel alive.
 
 ### Characters and small precise models
 Model with boxes, then details with `ascii` on the face; or author slices with `layers`. Model half and

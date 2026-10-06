@@ -130,6 +130,9 @@ uniform vec3 uLift; uniform vec3 uGamma; uniform vec3 uGain;
 uniform vec4 uVig; // amount, softness, roundness, -
 uniform vec3 uVigColor;
 uniform vec4 uFx; // grain, chromatic aberration, dither, grain size
+uniform vec4 uStars; // density, brightness, size (px), horizon fade
+uniform vec4 uOutline; // amount, -, width (px), threshold
+uniform vec3 uOutlineColor;
 ${DEPTH_FN}
 varying vec2 vUv;
 
@@ -194,6 +197,18 @@ void main() {
   vec3 geo = oetf(tonemap((c + bloom) * uExposure));
   geo = grade(geo);
   vec3 bg = background(uv);
+  if (uStars.x > 0.0) {
+    float cs = 3.0 * max(uStars.z, 0.5);
+    vec2 sg = uv * uRes / cs, cid = floor(sg);
+    float sh = h12(cid + 0.37);
+    if (sh < uStars.x) {
+      vec2 sp = vec2(h12(cid + 1.3), h12(cid + 7.1)) * 0.6 + 0.2;
+      float sd = length(fract(sg) - sp) * cs;
+      float tw = 0.65 + 0.35 * sin(uTime * (0.8 + 2.5 * h12(cid + 3.3)) + sh * 60.0);
+      float mag = pow(1.0 - sh / uStars.x, 2.0);
+      bg += vec3(0.9, 0.93, 1.0) * smoothstep(0.6 + mag * uStars.z, 0.0, sd) * uStars.y * tw * (0.25 + mag) * smoothstep(0.0, uStars.w, uv.y);
+    }
+  }
   if (uBgB.z > 0.0) bg += (h12(uv * uRes) - 0.5) * uBgB.z;
   vec3 bgl = oetf(tonemap(bloom * uExposure));
   bg = 1.0 - (1.0 - bg) * (1.0 - bgl);
@@ -205,6 +220,19 @@ void main() {
     geo = mix(geo, uFog.w > 0.5 ? uFogColor : bg, f);
   }
   vec3 col = mix(bg, geo, a);
+  // ink outline from depth discontinuities (silhouettes + creases between objects)
+  if (uOutline.x > 0.0) {
+    vec2 px = uOutline.z / uRes;
+    float dc = linDepth(min(texture2D(tDepth, uv).r, 0.9999999));
+    float e = 0.0;
+    for (int i = 0; i < 4; i++) {
+      vec2 o = i == 0 ? vec2(px.x, 0.0) : i == 1 ? vec2(-px.x, 0.0) : i == 2 ? vec2(0.0, px.y) : vec2(0.0, -px.y);
+      float dn = linDepth(min(texture2D(tDepth, uv + o).r, 0.9999999));
+      e = max(e, (dn - dc) / max(dc, 1e-3));
+    }
+    float edge = smoothstep(uOutline.w, uOutline.w * 2.0, e) * step(0.001, a);
+    col = mix(col, uOutlineColor, edge * uOutline.x);
+  }
   // vignette
   if (uVig.x > 0.0) {
     vec2 p = (uv - 0.5) * vec2(mix(1.0, uRes.x / uRes.y, uVig.z), 1.0);
@@ -250,6 +278,7 @@ export class Post {
       uLift: { value: new THREE.Vector3() }, uGamma: { value: new THREE.Vector3(1, 1, 1) }, uGain: { value: new THREE.Vector3(1, 1, 1) },
       uVig: { value: new THREE.Vector4() }, uVigColor: { value: new THREE.Color() },
       uFx: { value: new THREE.Vector4(0, 0, 1, 1) },
+      uStars: { value: new THREE.Vector4() }, uOutline: { value: new THREE.Vector4() }, uOutlineColor: { value: new THREE.Color() },
       ...cam,
     };
     this.mComp = fsMaterial(COMPOSITE, this.u);
@@ -310,6 +339,11 @@ export class Post {
     setDisplay(u.uVigColor.value, L.vignette.color ?? '#000000');
     u.uFx.value.set(L.grain.amount, L.chromatic ?? 0, L.dither ?? 1, L.grain.size ?? 1);
     if (L.fog.color) setDisplay(u.uFogColor.value, L.fog.color);
+    const st = bg.stars ?? 0, so = typeof st === 'object' ? st : { amount: st };
+    u.uStars.value.set(so.amount ? (so.density ?? 0.05) : 0, so.amount ?? 0, so.size ?? 1, so.horizon ?? 0.25);
+    const ol = L.outline ?? {};
+    u.uOutline.value.set(ol.amount ?? 0, 0, ol.width ?? 1, ol.threshold ?? 0.015);
+    setDisplay(u.uOutlineColor.value, ol.color ?? '#1a1410');
     this.look = L;
   }
 

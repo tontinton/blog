@@ -341,3 +341,160 @@ export function bricks(g, a, b, o = {}) {
   }
   return g;
 }
+
+const PEOPLE = {
+  skin: ['#f1c7a3', '#d9a07a', '#a8704e', '#7a4e32'],
+  shirt: ['#c94a4a', '#4a7ac9', '#e0b84a', '#5aa86a', '#e8e2d6', '#8a5ac0', '#e07a3a'],
+  pants: ['#3a4a6a', '#5a4632', '#2e2e34', '#6a6a72'],
+  hair: ['#2a1c14', '#5a3a1e', '#a8702e', '#1a1a1a', '#d8c08a'],
+};
+
+/**
+ * Tiny person (diorama scale, ~7 voxels tall) facing `side`. Colors are random per seed unless given.
+ * opts: height (6 | 7 | 8), skin, shirt, pants, hair, hat (id), pose 'stand' | 'wave' | 'sit', side, palette-free (colors are added via g.palette.color)
+ */
+export function person(g, p, o = {}) {
+  const R = R_(o);
+  const P = g.palette;
+  const c = (k, v) => (v != null ? g.mat(v) : P.color(R.pick(PEOPLE[k]), null));
+  const skin = c('skin', o.skin), shirt = c('shirt', o.shirt), pants = c('pants', o.pants), hair = c('hair', o.hair);
+  const side = o.side ?? '+z';
+  const [fx, fz] = SIDES[side];
+  // local frame: across = perpendicular to facing, so the figure is 2 wide, 1 deep
+  const ax = fz !== 0 ? 1 : 0, az = fx !== 0 ? 1 : 0;
+  const at = (a, y, d = 0) => [p[0] + ax * a + fx * d, p[1] + y, p[2] + az * a + fz * d];
+  const put = (q, m) => g.put(q[0], q[1], q[2], m, o.mode);
+  const H = o.height ?? 7, leg = H >= 8 ? 3 : 2, torso = H >= 7 ? 2 : 2;
+  const sit = o.pose === 'sit';
+  for (let y = 0; y < leg; y++) for (const a of [0, 1]) put(sit && y === leg - 1 ? at(a, 0, 1) : at(a, sit ? 0 : y), pants);
+  const ty = sit ? 1 : leg;
+  for (let y = 0; y < torso; y++) for (const a of [0, 1]) put(at(a, ty + y), shirt);
+  // arms (sleeves + hands)
+  put(at(-1, ty + 1), shirt); put(at(2, ty + 1), shirt);
+  put(at(-1, ty), skin);
+  if (o.pose === 'wave') { put(at(2, ty + 2), shirt); put(at(2, ty + 3), skin); } else put(at(2, ty), skin);
+  const hy = ty + torso;
+  for (const a of [0, 1]) { put(at(a, hy), skin); put(at(a, hy + 1), skin); put(at(a, hy + 2), o.hat ? g.mat(o.hat) : hair); put(at(a, hy + 1, -1), hair); }
+  if (o.hat) for (const a of [-1, 0, 1, 2]) put(at(a, hy + 2), g.mat(o.hat));
+  return g;
+}
+
+/** Campfire: stone ring, crossed logs, flames. Returns the fire's top [x,y,z] (for an embers particle box). opts: stone, log, fire, radius */
+export function campfire(g, p, o = {}) {
+  const r = o.radius ?? 2;
+  for (let a = 0; a < 12; a++) {
+    const t = (a / 12) * Math.PI * 2;
+    g.put(Math.round(p[0] + Math.cos(t) * r), p[1], Math.round(p[2] + Math.sin(t) * r), o.stone ?? 'stoneDark');
+  }
+  g.line([p[0] - 1, p[1], p[2] - 1], [p[0] + 1, p[1], p[2] + 1], o.log ?? 'bark');
+  g.line([p[0] - 1, p[1], p[2] + 1], [p[0] + 1, p[1], p[2] - 1], o.log ?? 'bark');
+  g.set(p[0], p[1] + 1, p[2], g.mat(o.fire ?? 'fire'));
+  g.put(p[0] + 1, p[1] + 1, p[2], o.fire ?? 'fire', 'keep');
+  g.put(p[0], p[1] + 1, p[2] + 1, o.fire ?? 'fire', 'keep');
+  g.set(p[0], p[1] + 2, p[2], g.mat(o.fire ?? 'fire'));
+  return [p[0], p[1] + 3, p[2]];
+}
+
+/** Park bench facing `side`. opts: length (3), seat, leg */
+export function bench(g, p, side = '+z', o = {}) {
+  const [fx, fz] = SIDES[side];
+  const L = o.length ?? 3, ax = fz !== 0 ? 1 : 0, az = fx !== 0 ? 1 : 0;
+  for (let i = 0; i < L; i++) {
+    const x = p[0] + ax * i, z = p[2] + az * i;
+    g.put(x, p[1] + 1, z, o.seat ?? 'plank');
+    g.put(x - fx, p[1] + 2, z - fz, o.seat ?? 'plank');
+    if (i === 0 || i === L - 1) g.put(x, p[1], z, o.leg ?? 'metalDark');
+  }
+  return g;
+}
+
+/** Signpost: post + board (optionally with pixel text on the +z face). opts: height, post, board, text, ink */
+export function signpost(g, p, o = {}) {
+  const h = o.height ?? 4;
+  g.box(p, [p[0], p[1] + h - 1, p[2]], o.post ?? 'beam');
+  const w = o.text ? o.text.length * 4 + 1 : 5;
+  g.box([p[0] - Math.floor(w / 2), p[1] + h, p[2]], [p[0] - Math.floor(w / 2) + w - 1, p[1] + h + 6, p[2]], o.board ?? 'plank');
+  if (o.text) g.text(o.text, [p[0] - Math.floor(w / 2) + 1, p[1] + h + 5, p[2] + 1], o.ink ?? 'plankDark');
+  return g;
+}
+
+/** Hanging lantern: chain of `drop` voxels down from p, a lamp, and a cap. opts: drop (2), chain, lamp, cap */
+export function lantern(g, p, o = {}) {
+  const d = o.drop ?? 2;
+  for (let i = 0; i < d; i++) g.put(p[0], p[1] - i, p[2], o.chain ?? 'metalDark');
+  g.put(p[0], p[1] - d, p[2], o.cap ?? 'metalDark');
+  g.set(p[0], p[1] - d - 1, p[2], g.mat(o.lamp ?? 'lamp'));
+  g.put(p[0], p[1] - d - 2, p[2], o.cap ?? 'metalDark');
+  return g;
+}
+
+/**
+ * Plank bridge from a to b (same y; runs along x or z). opts: width (3), deck, rail, post, arch (rise at the middle), every
+ */
+export function bridge(g, a, b, o = {}) {
+  const alongX = Math.abs(b[0] - a[0]) >= Math.abs(b[2] - a[2]);
+  const n = Math.abs(alongX ? b[0] - a[0] : b[2] - a[2]), s = Math.sign(alongX ? b[0] - a[0] : b[2] - a[2]) || 1;
+  const w = o.width ?? 3, arch = o.arch ?? 0, every = o.every ?? 3;
+  for (let i = 0; i <= n; i++) {
+    const t = n ? i / n : 0, y = a[1] + Math.round(Math.sin(Math.PI * t) * arch);
+    for (let k = 0; k < w; k++) {
+      const x = alongX ? a[0] + s * i : a[0] + k, z = alongX ? a[2] + k : a[2] + s * i;
+      g.put(x, y, z, (i + k) % 2 ? o.deck ?? 'plank' : o.deck2 ?? o.deck ?? 'plankLight');
+    }
+    for (const k of [-1, w]) {
+      const x = alongX ? a[0] + s * i : a[0] + k, z = alongX ? a[2] + k : a[2] + s * i;
+      if (i % every === 0) g.box([x, y, z], [x, y + 2, z], o.post ?? 'beam');
+      else g.put(x, y + 2, z, o.rail ?? 'plankDark');
+    }
+  }
+  return g;
+}
+
+/**
+ * Boat / ship hull along +x from p (keel at p.y, stern at p.x, bow at p.x + length). Clears its interior, so it
+ * can be placed into water already in the grid (put the keel ~1–2 below the water surface).
+ * opts: length (14), width (6, odd is best), height (3), hull, hullTop (stripe id), deck, cabin ({ at, w, h, m, roof, windows }), mast (height)
+ */
+export function boat(g, p, o = {}) {
+  const L = o.length ?? 14, W = o.width ?? 6, H = o.height ?? 3;
+  const half = (W - 1) / 2;
+  for (let i = 0; i < L; i++) {
+    const t = i / (L - 1);
+    const bow = t > 0.6 ? 1 - (t - 0.6) / 0.4 : 1;               // taper toward the bow
+    const stern = t < 0.08 ? 0.85 : 1;
+    for (let y = 0; y < H; y++) {
+      const k = (y + 1) / H;                                        // narrower at the keel
+      const hw = Math.max(0, half * bow * stern * (0.55 + 0.45 * k));
+      for (let dz = -Math.ceil(half); dz <= Math.ceil(half); dz++) {
+        if (Math.abs(dz) > hw + 0.25) continue;
+        const shell = Math.abs(dz) > hw - 1 || y === 0;
+        const m = y === H - 1 && shell ? o.hullTop ?? o.hull ?? 'plankDark' : shell ? o.hull ?? 'plank' : 0;
+        // interior: air (clears water placed earlier) with the deck one below the rim
+        g.set(p[0] + i, p[1] + y, p[2] + dz, m ? g.mat(m) : y === H - 2 ? g.mat(o.deck ?? 'plankLight') : 0);
+      }
+    }
+  }
+  if (o.cabin) {
+    const c = o.cabin === true ? {} : o.cabin;
+    const cx = p[0] + (c.at ?? Math.round(L * 0.25)), cw = c.w ?? Math.max(3, Math.round(L * 0.25)), ch = c.h ?? 3;
+    const hz = Math.max(1, Math.floor(half) - 1);
+    g.box([cx, p[1] + H - 1, p[2] - hz], [cx + cw - 1, p[1] + H + ch - 2, p[2] + hz], c.m ?? 'plaster');
+    g.box([cx - 1, p[1] + H + ch - 1, p[2] - hz - 1], [cx + cw, p[1] + H + ch - 1, p[2] + hz + 1], c.roof ?? 'plankDark');
+    if (c.windows !== false) for (let x = cx + 1; x < cx + cw - 1; x += 2) { g.set(x, p[1] + H, p[2] + hz, g.mat(c.window ?? 'window')); g.set(x, p[1] + H, p[2] - hz, g.mat(c.window ?? 'window')); }
+  }
+  if (o.mast) g.box([p[0] + Math.round(L * 0.55), p[1] + H - 1, p[2]], [p[0] + Math.round(L * 0.55), p[1] + H + o.mast, p[2]], o.mastM ?? 'beam');
+  return g;
+}
+
+/** Little car facing +x (or `axis: 'z'`). opts: color (body id), glass, wheel, light (headlight id) */
+export function car(g, p, o = {}) {
+  const ax = o.axis === 'z';
+  const P = (dx, dy, dz) => (ax ? [p[0] + dz, p[1] + dy, p[2] + dx] : [p[0] + dx, p[1] + dy, p[2] + dz]);
+  const put = (q, m) => g.put(q[0], q[1], q[2], m, o.mode);
+  const body = o.color ?? 'fabricRed';
+  for (let x = 0; x < 6; x++) for (let z = 0; z < 3; z++) { put(P(x, 1, z), body); if (x > 0 && x < 5) put(P(x, 2, z), x === 1 || x === 4 ? o.glass ?? 'window' : body); }
+  for (let x = 2; x <= 3; x++) for (let z = 0; z < 3; z++) put(P(x, 3, z), body);
+  for (const x of [1, 4]) for (const z of [-1, 3]) put(P(x, 0, z === -1 ? 0 : 2), o.wheel ?? 'metalDark');
+  put(P(5, 1, 0), o.light ?? 'lamp'); put(P(5, 1, 2), o.light ?? 'lamp');
+  return g;
+}

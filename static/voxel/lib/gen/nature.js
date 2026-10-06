@@ -394,3 +394,17 @@ export function vines(g, o = {}) {
   }
   return g;
 }
+
+/** Waterfall: a sheet of water falling from `top` down to `bottomY`, with foam at the base. opts: width (3), depth (1), water, foam, axis ('x' sheet spans x) */
+export function waterfall(g, top, bottomY, o = {}) {
+  const w = o.width ?? 3, d = o.depth ?? 1, alongX = (o.axis ?? 'x') === 'x';
+  for (let y = bottomY; y <= top[1]; y++) for (let i = 0; i < w; i++) for (let k = 0; k < d; k++) {
+    const x = alongX ? top[0] + i : top[0] + k, z = alongX ? top[2] + k : top[2] + i;
+    g.put(x, y, z, o.water ?? 'water', o.mode ?? 'keep');
+  }
+  if (o.foam !== false) for (let i = -1; i <= w; i++) for (let k = -1; k <= d; k++) {
+    const x = alongX ? top[0] + i : top[0] + k, z = alongX ? top[2] + k : top[2] + i;
+    if (hash3(x, bottomY, z, 3) < 0.7) g.put(x, bottomY, z, o.foam ?? 'cloud', 'replace');
+  }
+  return g;
+}

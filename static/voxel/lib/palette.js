@@ -51,7 +51,7 @@ export class Palette {
 
   /** Add a named material, returns its id. Also exposed as `palette[name]`. */
   add(name, def) {
-    if (typeof name === 'object') { def = name; name = null; }
+    if (name && typeof name === 'object') { def = name; name = null; }
     if (name && this.names.has(name)) return this.update(name, def), this.names.get(name);
     const id = this.defs.length;
     if (id > 65535) throw new Error('palette full (65535 materials)');

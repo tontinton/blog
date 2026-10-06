@@ -179,7 +179,8 @@ P.add('rune', { color: '#335', custom: [2, 0, 0, 0] });   // mc.x = 2 for rune v
 ## Particles (`particles.js`)
 
 `stage.particles({ preset, ...overrides })`. Presets: `fireflies dust sparkles snow rain embers bubbles
-petals leaves cubes smoke`. Options: `count`, `box: [[x0,y0,z0],[x1,y1,z1]]` (world = grid coords; default
+petals leaves cubes smoke`. `mist` (waterfall spray) too.
+Options: `count`, `box: [[x0,y0,z0],[x1,y1,z1]]` (world = grid coords; default
 scene bounds), `motion: 'drift'|'fall'|'rise'|'float'|'plume'`, `speed`, `turbulence`, `sway`,
 `shape: 'soft'|'square'|'cube'`, `lit` (cubes: sun-lit), `color`/`colors`, `size` (world units),
 `sizeJitter`, `glow` (HDR → bloom), `opacity`, `blink`, `blinkSpeed`, `spin`, `flat` (cube y-scale),
@@ -215,7 +216,12 @@ All accept `seed` (or `R`, an rng) and material overrides. Foliage uses `mode: '
 · `lamppost(g, p, { height, pole, lamp, arm })` · `well` · `truss(g, a, b, m, { size: 4 })` (lattice girder)
 · `facade(g, a, b, { every: [3,3], size: [1,1], lit: [ids], window, chance })` (window grids)
 · `bricks(g, a, b, { size: [3,2], stones, mortar, axis, stagger })` (big stones + mortar; `axis: 'y'` = floor planks/paving)
-· props: `crate`, `barrel`, `table`, `chair`, `bed`, `bookshelf`, `fireplace(g, p, side, { w, h, stone, fire })`
+· props: `crate`, `barrel`, `table`, `chair`, `bed`, `bookshelf`, `fireplace(g, p, side, { w, h, stone, fire })`,
+  `bench(g, p, side, { length })`, `signpost(g, p, { text })`, `lantern(g, ceilingPoint, { drop })`, `campfire(g, p)` → fire top
+· `person(g, p, { side, pose: 'stand'|'wave'|'sit', height, skin, shirt, pants, hair, hat, seed })` — tiny ~7-voxel people (random colors per seed)
+· `bridge(g, a, b, { width, arch, deck, rail, post })` · `boat(g, keelStern, { length, width, height, hull, hullTop, deck, cabin, mast })` (clears its interior — drop it into water)
+· `car(g, p, { color, axis, glass, wheel, light })`
+· nature.js also has `waterfall(g, top, bottomY, { width, depth, water, foam })` (pair with `stage.particles({ preset: 'mist', box })`)
 
 ---
 

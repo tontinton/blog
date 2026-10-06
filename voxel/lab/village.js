@@ -1,0 +1,34 @@
+// New generators: person, campfire, bench, signpost, lantern, bridge, boat, car, waterfall (+ mist particles).
+import * as V from '../lib/index.js';
+const { Stage, VoxelGrid, Palette, NATURE, BUILD, rng } = V;
+const stage = new Stage({ look: 'daylight', camera: { yaw: 35, pitch: 32 } });
+const P = new Palette({ ...NATURE, ...BUILD, water: { color: '#4ab4c8', kind: 'water', opacity: 0.35 } });
+const g = new VoxelGrid(P);
+const R = rng(2);
+V.tile(g, [-30, -22], [30, 22], { depth: 6 });
+// cliff at the back with a waterfall into a stream
+g.box([-30, 1, -22], [30, 12, -15], 'stone');
+V.strata(g, { on: ['stone'] });
+g.box([-30, 13, -22], [30, 13, -15], 'grass');
+g.box([-3, 1, -14], [3, 0, 22], 0);
+g.box([-3, -2, -14], [3, -1, 22], 'water');
+g.box([-3, -3, -14], [3, -3, 22], 'sand');
+g.box([-2, 1, -15], [2, 13, -15], 0);
+V.waterfall(g, [-2, 13, -15], -1, { width: 5, depth: 1 });
+V.bridge(g, [-5, 1, 4], [5, 1, 4], { width: 3, arch: 1 });
+V.boat(g, [6, -2, 12], { length: 12, width: 5, height: 3, cabin: true, axis: 'x' });
+V.house(g, [-26, 1, -10], { w: 10, d: 8, h: 5, lit: 0.5 });
+V.campfire(g, [-14, 1, 10]);
+for (let i = 0; i < 4; i++) V.person(g, [-17 + i * 2, 1, 13 - (i % 2) * 6], { seed: i + 1, side: i % 2 ? '+z' : '-z', pose: i === 3 ? 'wave' : 'stand' });
+V.person(g, [-20, 1, 8], { seed: 9, side: '+x', pose: 'sit' });
+V.bench(g, [12, 1, -10], '+z', { length: 4 });
+V.signpost(g, [10, 1, 2], { text: 'INN' });
+V.lantern(g, [20, 9, 0], { drop: 1 });
+g.box([18, 1, 0], [18, 9, 0], 'beam'); g.box([18, 9, 0], [20, 9, 0], 'beam');
+V.car(g, [16, 1, 12], { color: 'neonYellow' === 'x' ? 0 : 'fabric' });
+V.pine(g, [24, 1, -10], { height: 14 }); V.oak(g, [26, 1, 14], { height: 11 });
+V.scatter(g, (x, y, z, R) => V.grassTuft(g, [x, y, z], { R }), { on: ['grass'], density: 0.04 });
+stage.add(g, { bake: { ao: true, light: true } });
+stage.particles({ preset: 'mist', box: [[-4, -1, -15], [4, 6, -9]] });
+stage.particles({ preset: 'embers', count: 20, box: [[-15, 2, 9], [-13, 8, 11]] });
+stage.start();
