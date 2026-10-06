@@ -21,6 +21,8 @@ import { Post } from './post.js';
 import { resolveLook, merge } from './looks.js';
 import { rgb, srgbToLinear } from './color.js';
 import { Particles } from './particles.js';
+import { Actors } from './actors.js';
+import './gen/creatures.js'; // registers the built-in creatures
 import { createUI } from './ui.js';
 
 const DEG = Math.PI / 180;
@@ -59,6 +61,7 @@ export class Stage {
     this.models = [];
     this.updaters = [];
     this.particleSystems = [];
+    this.actorSystems = [];
     this.time = 0;
     this.fixedTime = params.has('t') ? Number(params.get('t')) : this.shot ? opts.shotTime ?? 0 : null;
     this.post = new Post(this.renderer, { samples: opts.msaa ?? 4 });
@@ -71,6 +74,7 @@ export class Stage {
     if (params.has('yaw')) cam.yaw = Number(params.get('yaw'));
     if (params.has('pitch')) cam.pitch = Number(params.get('pitch'));
     if (params.has('zoom')) cam.zoom *= Number(params.get('zoom'));
+    if (params.has('target')) cam.target = params.get('target').split(',').map(Number); // ?target=x,y,z&zoom=4 → close-up
     this.camera = cam.type === 'persp' ? new THREE.PerspectiveCamera(cam.fov, 1, 0.1, 5000) : new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 5000);
     this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
     Object.assign(this.controls, {
@@ -147,6 +151,9 @@ export class Stage {
    *   assets: './assets.js'  (instanced models referenced by ctx.instance(name, ...))
    *   bake ({ ao: true, light: true }), cluster (4), workers ('auto' | n | 0), keepGrid (true), model: {...add() opts}
    *   assetBake ({ ao: true }), onExtra(extra) for custom ctx.emit kinds
+   * Built-in ctx.emit kinds: 'particles' (stage.particles opts), 'light' (stage.light opts), 'actors'
+   * (stage.actors opts; creature by name), 'prop' ({ asset, position, rotation, pivot, animate: { spin, bob,
+   * sway } } — an animated copy of an asset: windmill blades, water wheels, a bobbing boat).
    * ?region=a,b (URL) builds only those regions — test one region in isolation.
    * Resolves to { group, grid, palette, assets: { name: group }, extras, stats }.
    */
@@ -178,31 +185,50 @@ export class Stage {
     }
     const tGen = performance.now() - t0;
     await step('Meshing', 0.55);
+    // actors need the voxels (terrain height field): free the grid only after they're placed
+    const free = (spec.model?.keepGrid ?? spec.keepGrid) === false;
     const group = await this.addAsync(grid, {
       bake: spec.bake ?? { ao: true, light: true }, cluster: spec.cluster, workers: pool ? undefined : 0,
-      keepGrid: spec.keepGrid, ...(spec.model ?? {}), palette: P,
+      ...(spec.model ?? {}), keepGrid: true, palette: P,
       onProgress: (f) => step('Meshing', 0.55 + 0.35 * f),
     });
-    // instanced assets
-    const assets = {};
-    if (instances.size) {
-      if (!spec.assets) throw new Error('regions used ctx.instance() but stage.world() got no `assets` module');
+    // instanced assets (+ animated props, which are separate copies of an asset)
+    const assets = {}, assetGrids = {};
+    const props = extras.filter((e) => e.kind === 'prop');
+    const names = [...new Set([...instances.keys(), ...props.map((e) => e.data.asset)])];
+    if (names.length) {
+      if (!spec.assets) throw new Error('regions used ctx.instance() / prop but stage.world() got no `assets` module');
       await step('Assets', 0.92);
-      const names = [...instances.keys()];
       const built = pool ? await pool.run({ type: 'assets', url: abs(spec.assets), names, palette: P.serialize() }) : await runAssets(abs(spec.assets), names, P.serialize());
       for (const name of names) {
-        const ag = new VoxelGrid(P);
+        const ag = (assetGrids[name] = new VoxelGrid(P));
         mergeInto(ag, P, built[name]);
-        assets[name] = await this.addAsync(ag, { bake: spec.assetBake ?? { ao: true }, palette: P, name, workers: pool ? undefined : 0, instances: instances.get(name), cluster: 0 });
+        if (instances.has(name)) assets[name] = await this.addAsync(ag, { bake: spec.assetBake ?? { ao: true }, palette: P, name, workers: pool ? undefined : 0, instances: instances.get(name), cluster: 0 });
       }
     }
-    // extras: particles, lights, actors, custom
+    // extras: particles, lights, actors, props, custom. Actors that differ only in area/path/count/seed (e.g.
+    // walkers emitted by every district) merge into one system: one draw call per part for all of them.
+    const merged = new Map();
     for (const e of extras) {
-      if (e.kind === 'particles') this.particles(e.data);
-      else if (e.kind === 'light') this.light(e.data);
-      else if (e.kind === 'actors' && this.actors) this.actors(e.data);
-      else spec.onExtra?.(e);
+      if (e.kind !== 'actors' || !(e.data.area || e.data.path)) continue;
+      const { area, path, count, seed, ...rest } = e.data;
+      const key = JSON.stringify(rest);
+      if (!merged.has(key)) { merged.set(key, { ...rest, seed, groups: [] }); e.merged = merged.get(key); }
+      else e.skip = true;
+      merged.get(key).groups.push({ area, path, count: count ?? 1 });
     }
+    for (const e of extras) {
+      if (e.skip) continue;
+      const d = e.data;
+      if (e.kind === 'particles') this.particles(d);
+      else if (e.kind === 'light') this.light(d);
+      else if (e.kind === 'actors') this.actors({ ...(e.merged ?? d), ground: d.ground ?? 'auto' });
+      else if (e.kind === 'prop') {
+        const g = this.add(assetGrids[d.asset], { palette: P, name: d.asset, bake: spec.assetBake ?? { ao: true }, cluster: 0, position: d.position, rotation: d.rotation, pivot: d.pivot, fit: false });
+        if (d.animate) this.animate(g, d.animate);
+      } else spec.onExtra?.(e);
+    }
+    if (free) { const m = group.userData.model; this._fitGroundFor(m); m.grid = null; }
     const stats = { regions: regions.length, generateMs: Math.round(tGen), totalMs: Math.round(performance.now() - t0), workers: pool?.size ?? 0, perRegionMs: timing, ...group.userData.model.stats };
     console.log('voxel world', JSON.stringify(stats));
     return { group, grid: group.userData.model.grid, palette: P, assets, extras, stats };
@@ -401,6 +427,45 @@ export class Stage {
     this.particleSystems.push(p);
     this.root.add(p.object);
     return p;
+  }
+
+  /**
+   * Animated creatures — cats, walkers, birds, ducks… (see actors.js for all options). Returns the Actors
+   * system; its .agents ({ x, y, z, heading, speed }) are live, e.g. to attach a light to a walker.
+   *   stage.actors({ creature: 'cat', count: 3 });   stage.actors({ creature: 'walker', behavior: 'path', path })
+   */
+  actors(opts) {
+    const a = new Actors(this, opts);
+    this.actorSystems.push(a);
+    this.root.add(a.object);
+    return a;
+  }
+
+  /**
+   * Procedural motion for any object (a group from add(), a light…): { spin: [x,y,z] rad/s, bob: voxels,
+   * sway: radians, speed (1), phase }. stage.animate(blades, { spin: [0, 0, 0.8] }); stage.animate(boat, { bob: 0.2, sway: 0.04 })
+   * (Under look.sun.update 'static' the shadow map won't follow; use sun.update: 2 or the object's shadow: false.)
+   */
+  animate(obj, a = {}) {
+    const p0 = obj.position.clone(), r0 = obj.rotation.clone(), sp = a.speed ?? 1, ph = a.phase ?? 0, s = a.spin ?? [0, 0, 0];
+    this.onUpdate((t) => {
+      const T = t * sp + ph;
+      obj.rotation.set(r0.x + s[0] * t * sp + (a.sway ? Math.sin(T * 0.9) * a.sway * 0.6 : 0), r0.y + s[1] * t * sp, r0.z + s[2] * t * sp + (a.sway ? Math.sin(T * 1.1 + 1) * a.sway : 0));
+      if (a.bob) obj.position.y = p0.y + Math.sin(T * 1.3) * a.bob;
+    });
+    return obj;
+  }
+
+  _stepActors(t, dt) {
+    const sys = this.actorSystems;
+    if (!sys.length) return;
+    if (this.fixedTime == null) { for (const a of sys) { a.step(dt, t); a.pose(t); } return; }
+    // frozen clock (?t=, shots): replay from spawn in lockstep at 30 Hz, once — deterministic, and followers see their leaders move
+    const todo = sys.filter((a) => a._simT !== this.fixedTime);
+    if (!todo.length) return;
+    const steps = Math.min(1800, Math.round(this.fixedTime * 30));
+    for (let k = 0; k < steps; k++) for (const a of todo) a.step(1 / 30, k / 30);
+    for (const a of todo) { a._simT = this.fixedTime; a.pose(this.fixedTime); }
   }
 
   /** Update the loader text/bar and yield a frame so it paints. `await` it between heavy build steps. */
@@ -709,6 +774,7 @@ export class Stage {
     }
     for (const m of this.models) m.uniforms.uMat.value = m.palette.texture();
     for (const p of this.particleSystems) p.update(t, dt);
+    this._stepActors(t, dt);
     for (const fn of this.updaters) fn(t, dt);
     this._render(t);
     this.ui?.frame(dt);

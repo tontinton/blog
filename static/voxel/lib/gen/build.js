@@ -7,6 +7,7 @@
 //   fence(g, [[-12, 1, 12], [12, 1, 12]], { every: 3 });
 //   lamppost(g, [8, 1, 12]);   truss(g, [0, 0, 0], [0, 30, 0], 'metal');   bookshelf(g, [2, 1, 1], { w: 5, h: 6 });
 import { rng, hash3, clamp } from '../random.js';
+import { defineGenerator } from '../registry.js';
 
 export const BUILD = {
   plank: { color: '#a8743f', jitter: 0.06, noise: { color: '#946234', scale: 0.4, amount: 0.6 } },
@@ -346,7 +347,7 @@ export function bricks(g, a, b, o = {}) {
   return g;
 }
 
-const PEOPLE = {
+export const PEOPLE = {
   skin: ['#f1c7a3', '#d9a07a', '#a8704e', '#7a4e32'],
   shirt: ['#c94a4a', '#4a7ac9', '#e0b84a', '#5aa86a', '#e8e2d6', '#8a5ac0', '#e07a3a'],
   pants: ['#3a4a6a', '#5a4632', '#2e2e34', '#6a6a72'],
@@ -503,3 +504,32 @@ export function car(g, p, o = {}) {
   put(P(5, 1, 0), o.light ?? 'lamp'); put(P(5, 1, 2), o.light ?? 'lamp');
   return g;
 }
+
+// ---- registry ------------------------------------------------------------------------------------------
+const B_ = (fn, summary, example, meta = {}) => defineGenerator(fn, { category: 'build', summary, example, ...meta });
+B_(walls, 'hollow walls with openings', (g) => walls(g, [-4, 1, -3], [4, 5, 3], 'brick', { openings: [{ side: '+z', w: 2, h: 3 }] }));
+B_(opening, 'cut a door/window into a wall box', (g) => { walls(g, [-4, 1, -3], [4, 5, 3], 'plaster'); opening(g, [-4, 1, -3], [4, 5, 3], { side: '+z', w: 3, h: 2, y: 1, fill: 'window', frame: 'beam' }); });
+B_(house, 'timber house: walls, roof, door, windows, chimney', (g) => house(g, [-5, 1, -4], { chimney: true, lit: 0.5, seed: 3 }));
+B_(fence, 'post-and-rail fence along a polyline', (g) => fence(g, [[-5, 1, -3], [4, 1, -3], [4, 1, 3]]));
+B_(stairs, 'straight stairs', (g) => stairs(g, [-3, 1, 0], '+x', 5, 'plank', { width: 2 }));
+B_(ladder, 'ladder (rails + rungs)', (g) => { g.box([-2, 1, -1], [2, 6, -1], 'stone'); ladder(g, [0, 1, 0], 6); });
+B_(lamppost, 'street lamp (emissive, bakes light)', (g) => lamppost(g, [0, 1, 0], { arm: '+x' }));
+B_(well, 'stone well with roof', (g) => well(g, [0, 1, 0]));
+B_(truss, 'lattice girder (cranes, towers)', (g) => { truss(g, [0, 1, 0], [0, 12, 0]); truss(g, [0, 12, 0], [8, 12, 0]); });
+B_(facade, 'grid of (lit) windows on a flat facade', (g) => { g.box([-5, 1, -2], [5, 12, 2], 'concrete'); facade(g, [-5, 2, 2], [5, 11, 2], { seed: 3 }); });
+B_(crate, 'wooden crate', (g) => { crate(g, [0, 1, 0]); crate(g, [2, 1, 0]); crate(g, [1, 3, 0]); });
+B_(barrel, 'banded barrel', (g) => barrel(g, [0, 1, 0]));
+B_(table, 'table', (g) => table(g, [-2, 1, -1]));
+B_(chair, 'chair facing a side', (g) => { chair(g, [-2, 1, 0], '+z'); chair(g, [2, 1, 0], '-x'); });
+B_(bed, 'bed with pillow + blanket', (g) => bed(g, [-2, 1, -1]));
+B_(bookshelf, 'bookshelf with random books', (g) => bookshelf(g, [-2, 1, 0], { seed: 3 }));
+B_(fireplace, 'fireplace with fire + chimney', (g) => fireplace(g, [-2, 1, -2]));
+B_(bricks, 'brick/stone courses (or paving)', (g) => bricks(g, [-6, 1, 0], [6, 7, 1]));
+B_(person, 'tiny static person (stand | wave | sit) — animated: creature walker', (g) => { person(g, [-3, 1, 0], { seed: 3, pose: 'wave' }); person(g, [2, 1, 0], { seed: 4 }); });
+B_(campfire, 'campfire (returns the fire top for embers)', (g) => campfire(g, [0, 1, 0]));
+B_(bench, 'park bench', (g) => bench(g, [-1, 1, 0]));
+B_(signpost, 'signpost with pixel text', (g) => signpost(g, [0, 1, 0], { text: 'HI' }));
+B_(lantern, 'hanging lantern', (g) => { g.box([-1, 1, 0], [-1, 8, 0], 'beam'); g.box([-1, 8, 0], [1, 8, 0], 'beam'); lantern(g, [1, 7, 0]); });
+B_(bridge, 'plank bridge with rails (+ arch)', (g) => bridge(g, [-5, 1, 0], [5, 1, 0], { arch: 2 }));
+B_(boat, 'boat hull (+ cabin, mast)', (g) => boat(g, [-7, 1, -3], { cabin: true, mast: 5 }));
+B_(car, 'little car', (g) => car(g, [-2, 1, -1]));

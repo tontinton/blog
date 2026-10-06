@@ -14,6 +14,7 @@
 // default for foliage so it never overwrites trunks/buildings).
 import { rng, noise, hash3, clamp } from '../random.js';
 import { spline } from '../shapes.js';
+import { defineGenerator } from '../registry.js';
 
 /** Ready-made materials used by the generator defaults. Spread into your palette and override freely. */
 export const NATURE = {
@@ -408,3 +409,26 @@ export function waterfall(g, top, bottomY, o = {}) {
   }
   return g;
 }
+
+// ---- registry (catalog: lab ?scene=catalog&category=nature; every example is unit-tested) ----------------
+// example(g) builds on a grid whose palette has NATURE + BUILD, ground surface at y = 0 (objects stand at y = 1).
+const N_ = (fn, summary, example, meta = {}) => defineGenerator(fn, { category: 'nature', summary, example, ...meta });
+N_(foliage, 'union of noisy leaf blobs (custom canopies)', (g) => foliage(g, [{ c: [0, 6, 0], r: 4 }, { c: [3, 8, 1], r: 3 }]));
+N_(oak, 'round deciduous tree (style blob | clumps)', (g) => oak(g, [0, 1, 0], { seed: 3 }));
+N_(blossom, 'sakura: twisty trunk, pink clumps', (g) => blossom(g, [0, 1, 0], { seed: 3 }));
+N_(bush, 'low round bush', (g) => bush(g, [0, 1, 0], { seed: 3 }));
+N_(pine, 'conifer with drooping tiers (+ snow caps)', (g) => pine(g, [0, 1, 0], { seed: 3, snow: 'snow' }));
+N_(palm, 'curved ringed palm with fronds', (g) => palm(g, [0, 1, 0], { seed: 3 }));
+N_(branches, 'bare branching tree (winter, bonsai skeleton)', (g) => branches(g, [0, 1, 0], { seed: 3 }));
+N_(willow, 'willow with hanging strands', (g) => willow(g, [0, 1, 0], { seed: 3 }));
+N_(rock, 'faceted boulder (+ moss top)', (g) => rock(g, [0, 1, 0], { seed: 3, moss: 'moss' }));
+N_(scatter, 'visit surface cells (place tufts, flowers, rocks…)', (g) => { g.box([-6, 0, -6], [6, 0, 6], 'grass'); scatter(g, (x, y, z, R) => grassTuft(g, [x, y, z], { R }), { on: ['grass'], density: 0.3 }); }, { ground: false });
+N_(grassTuft, '1–3 voxel grass blades', (g) => { for (let i = 0; i < 9; i++) grassTuft(g, [(i % 3) * 2, 1, Math.floor(i / 3) * 2], { seed: i }); });
+N_(flower, 'stem + petal head (plus | dot | cup)', (g) => { for (let i = 0; i < 6; i++) flower(g, [(i % 3) * 3, 1, Math.floor(i / 3) * 3], { seed: i }); });
+N_(mushroom, 'stem + dome cap (+ dots)', (g) => mushroom(g, [0, 1, 0], { dots: 'petalWhite' }));
+N_(reeds, 'reeds / cattails', (g) => reeds(g, [0, 1, 0], { seed: 3 }));
+N_(cloud, 'puffy flat-based cloud', (g) => cloud(g, [0, 12, 0], { seed: 3 }));
+N_(smoke, 'drifting chimney smoke puffs', (g) => smoke(g, [0, 4, 0], { seed: 3 }));
+N_(cover, 'moss/snow cover on top faces (noise)', (g) => { g.box([-4, 1, -4], [4, 6, 4], 'stone'); cover(g, { on: ['stone'], with: 'moss' }); });
+N_(vines, 'vines hanging down walls', (g) => { g.box([-4, 1, -4], [4, 8, 4], 'stone'); vines(g, { on: ['stone'], density: 0.3 }); });
+N_(waterfall, 'falling water sheet + foam', (g) => { g.box([-3, 1, -4], [3, 10, -2], 'stone'); waterfall(g, [-1, 10, -1], 0); });

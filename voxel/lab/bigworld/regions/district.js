@@ -25,4 +25,7 @@ export default function build(g, ctx) {
   // streetlife
   for (let i = 0; i < 14; i++) person(g, [X + R.int(8, S - 8), 1, Z + R.int(8, S - 8)], { seed: R.int(0, 1e6), side: R.pick(['+x', '-x', '+z', '-z']) });
   for (let i = 0; i < 4; i++) lamppost(g, [X + 8 + i * 24, 1, Z + 8], { height: 4, lamp: 'brazier', pole: 'bank' });
+  // animated life: walkers wander the streets (every district's merge into one system), a canoe plies the canal
+  ctx.emit('actors', { creature: 'walker', count: 10, variants: 4, area: [[X + 7, Z + 7], [X + S - 2, Z + S - 2]] });
+  if (R.chance(0.7)) ctx.emit('actors', { creature: 'canoe', behavior: 'path', path: [[X + 2.5, Z + 8], [X + 2.5, Z + S - 4]], seed: R.int(1, 1e6) });
 }

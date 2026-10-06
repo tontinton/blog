@@ -162,6 +162,9 @@ if (m3.z > 0.0 && uBevel.w > 0.0) {
   vec2 ln = smoothstep(0.5 - uBevel.w - fw, 0.5 - uBevel.w + fw, fq);
   col *= 1.0 - m3.z * max(ln.x, ln.y);
 }
+#if defined( USE_COLOR ) || defined( USE_INSTANCING_COLOR )
+col *= vColor.rgb; // per-instance tint (InstancedMesh.setColorAt) — actor color variety
+#endif
 /*VOXEL_COLOR_HOOK*/
 vec4 diffuseColor = vec4(col * diffuse, opacity);
 `;
