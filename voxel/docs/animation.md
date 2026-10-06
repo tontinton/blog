@@ -73,7 +73,8 @@ blob under each agent (cheap, works with static shadow maps). Force with `true |
 are 1 or 500 agents (+1 for blob shadows). `variants: n` builds n rigs from different seeds (varied clothes
 / coats) at n × parts draw calls; `options: [{ coat: 'black' }, { coat: 'white' }]` gives explicit variants;
 `tints: ['#fff', '#fc9']` multiplies colors per instance for free. Per frame each agent costs one matrix
-per part (~1 µs) — hundreds are fine.
+per part: measured 0.37 ms/frame of CPU for 400 agents (300 walkers + 100 cats) — hundreds are fine.
+Creating a system samples the terrain once (~0.3 s for a 256×256 area).
 
 **Reading/steering agents.** `const cats = stage.actors(...)`; `cats.agents[0]` is live
 `{ x, y, z, heading, speed, state }` — attach a light (`onUpdate(() => lamp.position.set(a.x, a.y + 3, a.z))`),
