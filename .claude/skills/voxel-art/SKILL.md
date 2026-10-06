@@ -31,7 +31,8 @@ Everything lives in two places:
    Page errors and shader errors print to the console and fail the shot. Close-ups:
    `--query 'target=x,y,z' --zoom 4`; animated scenes: `--t 5` (actors replay deterministically to t).
 5. Finish: `node shot.mjs /voxel/<slug>/ --size 1200x630 --out ../../static/voxel/<slug>/preview.jpg`,
-   fill in `static/voxel/pieces.json` (title, description, tags), commit.
+   fill in `static/voxel/pieces.json` (title, description, tags, `short` — the `tontinton.com/v/<short>`
+   link), run `node links.mjs` (also after any edit to the piece's index.html), commit.
 
 ## Rules of thumb
 - Deterministic only: `rng(seed)`, `noise(seed)`, `hash3()`; no `Math.random()`.
