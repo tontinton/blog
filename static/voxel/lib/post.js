@@ -22,7 +22,10 @@ function fsMaterial(fragmentShader, uniforms, defines = {}) {
 const BLOOM_DOWN = /* glsl */ `
 uniform sampler2D tSrc; uniform vec2 uTexel; uniform vec4 uThresh; // threshold, knee, prefilter on, clamp
 varying vec2 vUv;
-vec3 tap(vec2 o) { return texture2D(tSrc, vUv + o * uTexel).rgb; }
+vec3 tap(vec2 o) {
+  vec3 c = texture2D(tSrc, vUv + o * uTexel).rgb;
+  return any(isnan(c)) || any(isinf(c)) ? vec3(0.0) : clamp(c, 0.0, 1024.0); // a NaN/Inf texel would spread through every mip
+}
 float karis(vec3 c) { return 1.0 / (1.0 + max(c.r, max(c.g, c.b))); }
 void main() {
   // 13-tap downsample (Jimenez 2014)
@@ -193,9 +196,12 @@ void main() {
     vec2 d = (uv - 0.5) * uFx.y * 0.01;
     s.r = texture2D(tScene, uv - d).r; s.b = texture2D(tScene, uv + d).b;
   }
-  float a = clamp(s.a, 0.0, 1.0);
+  float a = isnan(s.a) ? 0.0 : clamp(s.a, 0.0, 1.0);
   vec3 c = a > 1e-4 ? s.rgb / a : vec3(0.0);
+  if (any(isnan(c)) || any(isinf(c))) c = vec3(0.0);
+  c = clamp(c, 0.0, 1024.0);
   vec3 bloom = texture2D(tBloom, uv).rgb * uBloom.x * uBloomTint;
+  if (any(isnan(bloom)) || any(isinf(bloom))) bloom = vec3(0.0);
   vec3 geo = oetf(tonemap((c + bloom) * uExposure));
   geo = grade(geo);
   vec3 bg = background(uv);
@@ -208,12 +214,12 @@ void main() {
       float sd = length(fract(sg) - sp) * cs;
       float tw = 0.65 + 0.35 * sin(uTime * (0.8 + 2.5 * h12(cid + 3.3)) + sh * 60.0);
       float mag = pow(1.0 - sh / uStars.x, 2.0);
-      bg += vec3(0.9, 0.93, 1.0) * smoothstep(0.6 + mag * uStars.z, 0.0, sd) * uStars.y * tw * (0.25 + mag) * smoothstep(0.0, uStars.w, uv.y);
+      bg += vec3(0.9, 0.93, 1.0) * (1.0 - smoothstep(0.0, 0.6 + mag * uStars.z, sd)) * uStars.y * tw * (0.25 + mag) * smoothstep(0.0, max(uStars.w, 1e-3), uv.y);
     }
   }
   if (uDisc.z > 0.0) {
     float dd = length((uv - uDisc.xy) * vec2(uRes.x / uRes.y, 1.0)) / uDisc.z;
-    bg = mix(bg, uDiscColor, smoothstep(1.0, 0.92, dd));
+    bg = mix(bg, uDiscColor, 1.0 - smoothstep(0.92, 1.0, dd));
     bg += uDiscColor * uDisc.w * exp(-max(dd - 1.0, 0.0) * 2.5) * 0.35;
   }
   if (uBgB.z > 0.0) bg += (h12(uv * uRes) - 0.5) * uBgB.z;
@@ -223,7 +229,7 @@ void main() {
   if (uFog.z > 0.0 && a > 0.0) {
     float d = texture2D(tDepth, uv).r;
     float z = linDepth(min(d, 0.9999999));
-    float f = smoothstep(uFog.x, uFog.y, z) * uFog.z;
+    float f = smoothstep(uFog.x, max(uFog.y, uFog.x + 1e-3), z) * uFog.z;
     geo = mix(geo, uFog.w > 0.5 ? uFogColor : bg, f);
   }
   vec3 col = mix(bg, geo, a);
@@ -236,13 +242,15 @@ void main() {
     float dd = linDepth(min(texture2D(tDepth, uv - vec2(0.0, px.y)).r, 0.9999999));
     float du = linDepth(min(texture2D(tDepth, uv + vec2(0.0, px.y)).r, 0.9999999));
     float e = max(abs(dl + dr - 2.0 * dc), abs(dd + du - 2.0 * dc)) / max(uOrtho > 0.5 ? uOutline.y : dc, 1e-3);
-    float edge = smoothstep(uOutline.w, uOutline.w * 2.0, e) * step(0.001, a);
+    float ow = max(uOutline.w, 1e-4);
+    float edge = smoothstep(ow, ow * 2.0, e) * step(0.001, a);
     col = mix(col, uOutlineColor, edge * uOutline.x);
   }
   // vignette
   if (uVig.x > 0.0) {
     vec2 p = (uv - 0.5) * vec2(mix(1.0, uRes.x / uRes.y, uVig.z), 1.0);
-    float v = smoothstep(0.8 - uVig.y * 0.5, 0.8 + uVig.y * 0.5, length(p) * 1.414);
+    float vs = max(uVig.y, 1e-3);
+    float v = smoothstep(0.8 - vs * 0.5, 0.8 + vs * 0.5, length(p) * 1.414);
     col = mix(col, uVigColor, v * uVig.x);
   }
   // film grain (luma-weighted), dithering

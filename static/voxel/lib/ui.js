@@ -120,7 +120,7 @@ export function createUI(stage, o = {}) {
       acc += dt; frames++;
       if (acc > 0.5) {
         const s = stage.stats();
-        statsEl.textContent = `${Math.round(frames / acc)} fps  dpr ${stage.dpr}\n${s.voxels.toLocaleString()} voxels  ${s.quads.toLocaleString()} quads\n${s.drawCalls} draws  ${s.triangles.toLocaleString()} tris\nmesh ${s.meshMs}ms  bake ${s.bakeMs}ms  lights ${s.lightGroups}`;
+        statsEl.textContent = `${Math.round(frames / acc)} fps  dpr ${stage.dpr}\n${s.voxels.toLocaleString()} voxels  ${s.quads.toLocaleString()} quads\n${s.drawCalls} draws  ${s.triangles.toLocaleString()} tris\nmesh ${s.meshMs}ms  bake ${s.bakeMs}ms  lights ${s.lightGroups}\n${gpuName(stage.renderer)}`;
         acc = 0; frames = 0;
       }
     },
@@ -194,4 +194,17 @@ function diff(a, b) {
     else if (JSON.stringify(a?.[k]) !== JSON.stringify(b[k])) out[k] = b[k];
   }
   return out;
+}
+
+// GPU name for the ?debug overlay (device-specific rendering bugs are easier to chase with it)
+let gpu = null;
+function gpuName(renderer) {
+  if (gpu !== null) return gpu;
+  try {
+    const gl = renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info');
+    const hp = gl.getShaderPrecisionFormat(gl.FRAGMENT_SHADER, gl.HIGH_FLOAT);
+    const name = String(ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)).replace(/^ANGLE \((.*)\)$/, '$1');
+    gpu = `${name.length > 44 ? name.slice(0, 43) + '…' : name}\nfrag highp ${hp && hp.precision > 0 ? `${hp.precision} bits` : 'unsupported'}`;
+  } catch { gpu = ''; }
+  return gpu;
 }
