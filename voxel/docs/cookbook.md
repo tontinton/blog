@@ -2,9 +2,11 @@
 
 Techniques that make voxel pieces look like the references (isometric dioramas, cutaway rooms,
 floating islands, toy characters, neon cities). Worked, runnable examples live in `voxel/lab/`
-(`node voxel/tools/shot.mjs /voxel/_lab/ --query scene=<name>`): `loft` (interior, lights),
-`bigisland` (750k voxels, arches, caves, cutaway water), `neon` (night city), `bunny` (character + DOF),
-`island`, `catalog` (every generator), `features` (hooks, instances, pivots, lights, pick), `night`.
+(`node voxel/tools/shot.mjs /voxel/_lab/ --query scene=<name>`): `forest` (green toy tile, ivy roof —
+reference 5), `loft` (cozy interior, many lights — reference 1), `bigisland` (750k voxels, arches, glowing
+caves, cutaway water — reference 2), `bunny` (character + DOF — reference 3), `neon` (night city —
+reference 4), `village` and `harbor` (people, waterfall, bridge, boats, cars), `island`, `catalog` (every
+nature generator), `features` (hooks, instances, pivots, lights, pick), `night`, `readme` (the README example).
 The published demo is `static/voxel/cottage/scene.js`.
 
 ## Scale and composition
@@ -109,6 +111,17 @@ stage.onUpdate((t, dt) => { blade.rotation.z = t * 0.8; boat.position.y = Math.s
 - Wind: `sway` on materials (+ `look.wind`). Glow: `flicker`. Water ripples: automatic.
 - Frame animation (a walking creature): build 2–4 grids, `stage.add` each, toggle `group.visible`.
 - Shader animation: `hooks` (pulsing runes, scrolling lights) — see api.md.
+
+### Restyling the shading
+Looks cover most moods; for a different *shading model* use hooks. Cel shading (`lab/cel.js`):
+```js
+stage.add(g, { hooks: { light: `{
+  float l = dot(reflectedLight.directDiffuse, vec3(0.333)) / max(dot(diffuseColor.rgb, vec3(0.333)), 1e-3);
+  reflectedLight.directDiffuse = diffuseColor.rgb * (l > 0.6 ? 1.0 : l > 0.2 ? 0.55 : 0.2) * 2.2;
+  reflectedLight.indirectDiffuse += diffuseColor.rgb * pow(1.0 - saturate(dot(normal, geometryViewDir)), 3.0) * 0.6;
+}` } });
+```
+with `look: 'toon'` (ink outlines, no bevels). Hatching, posterization, x-ray, scanlines: `output` hook.
 - Particles: `fireflies dust sparkles snow rain embers bubbles petals leaves cubes smoke`.
 
 ### Interaction

@@ -43,7 +43,8 @@ export class Stage {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.style.cssText = 'display:block;width:100%;height:100%;touch-action:none;outline:none';
     el.appendChild(this.renderer.domElement);
-    this.maxDpr = Number(params.get('dpr')) || opts.pixelRatio || Math.min(window.devicePixelRatio || 1, 2);
+    const coarse = window.matchMedia?.('(pointer: coarse)').matches; // phones/tablets: cap a bit lower
+    this.maxDpr = Number(params.get('dpr')) || opts.pixelRatio || Math.min(window.devicePixelRatio || 1, coarse ? 1.5 : 2);
     this.dpr = this.maxDpr;
 
     this.scene = new THREE.Scene();
@@ -353,18 +354,22 @@ export class Stage {
       for (const p of corners) { hw = Math.max(hw, Math.abs(p.dot(r))); hh = Math.max(hh, Math.abs(p.dot(up))); }
     }
     this._frame = { hw, hh, target, R };
-    const dir = new THREE.Vector3(Math.cos(pitch) * Math.sin(c.yaw * DEG), Math.sin(pitch), Math.cos(pitch) * Math.cos(c.yaw * DEG));
     const cam = this.camera;
+    // once running, refits (models added, look changes) keep the viewer's current orbit + zoom
+    const keep = this._started && !force && this.camDist;
+    const dir = keep ? cam.position.clone().sub(this.controls.target).normalize()
+      : new THREE.Vector3(Math.cos(pitch) * Math.sin(c.yaw * DEG), Math.sin(pitch), Math.cos(pitch) * Math.cos(c.yaw * DEG));
     if (cam.isOrthographicCamera) {
       this.camDist = R * 4;
       cam.position.copy(target).addScaledVector(dir, this.camDist);
       cam.near = 0.1; cam.far = this.camDist + R * 6;
-      cam.zoom = c.zoom;
+      if (!keep) cam.zoom = c.zoom;
     } else {
+      const ratio = keep ? cam.position.distanceTo(this.controls.target) / this.camDist : 1 / c.zoom;
       const t = Math.tan((c.fov * DEG) / 2);
       const aspect = this.w / this.h;
       this.camDist = (Math.max(hh, hw / aspect) * c.margin) / t + R * 0.35;
-      cam.position.copy(target).addScaledVector(dir, this.camDist / c.zoom);
+      cam.position.copy(target).addScaledVector(dir, this.camDist * ratio);
       cam.near = Math.max(0.05, this.camDist * 0.02); cam.far = this.camDist * 4 + R * 4;
     }
     this.controls.target.copy(target);
@@ -454,7 +459,7 @@ export class Stage {
     this.renderer.setPixelRatio(this.dpr);
     this.renderer.setSize(w, h, false);
     this.post.setSize(w * this.dpr, h * this.dpr);
-    this._layoutDirty = true;
+    if (this._frame) this._frameCamera(); else this._layoutDirty = true; // don't reset the orbit on resize
     this._dirty = true;
   }
 
@@ -463,6 +468,7 @@ export class Stage {
   /** Start rendering (hides the loader). Returns a promise resolved after the first frame. */
   start() {
     this._layout(true);
+    this._started = true;
     this._last = performance.now();
     this._t0 = this._last;
     return new Promise((ok) => {
@@ -533,7 +539,7 @@ export class Stage {
       }
     }
     this._renderReflection();
-    this.post.render(this.scene, this.camera, { time: t, fog, dof });
+    this.post.render(this.scene, this.camera, { time: t, fog, dof, radius: R });
   }
 
   _renderReflection() {

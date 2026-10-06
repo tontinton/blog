@@ -13,8 +13,9 @@ Everything lives in two places:
 
 1. Read `voxel/README.md` (mental model + gotchas). Load `docs/api.md` for exact signatures, `docs/looks.md`
    for lighting/mood, `docs/cookbook.md` for technique recipes. Skim the closest lab scene
-   (`voxel/lab/loft.js` interiors, `bigisland.js` big nature, `neon.js` night city, `bunny.js` characters + DOF,
-   `features.js` hooks/instances/pivots/picking) and the demo `static/voxel/cottage/scene.js`.
+   (`voxel/lab/forest.js` toy tile, `loft.js` interiors, `bigisland.js` big nature, `neon.js` night city,
+   `bunny.js` characters + DOF, `village.js`/`harbor.js` people/boats/waterfalls, `features.js`
+   hooks/instances/pivots/picking) and the demo `static/voxel/cottage/scene.js`.
 2. Scaffold: `cd voxel/tools && node new.mjs <slug> "Title" "Description." <look>` → `static/voxel/<slug>/`.
 3. Build in `scene.js`: palette (`{ ...NATURE, ...BUILD, ...own }`) → grid → shapes/generators →
    `stage.add(g, { bake: { ao: true, light: true } })` → particles → `stage.start()`.
