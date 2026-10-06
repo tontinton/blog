@@ -24,6 +24,11 @@ Iterate without editing code: `?debug` (panel + "copy look JSON" → paste as ov
 | `cozy` | lamp-lit interiors | dark surround, warm baked light, glow, vignette, **glossy floor reflection** |
 | `clay` | checking form | everything desaturated, no bloom |
 | `winter` | snow scenes | cold bright light, blue shadows |
+| `night` | moonlit villages | deep blue gradient with **stars**, cool moon, warm emissives |
+| `rainy` | overcast/rain | soft shadowless light, grey-blue haze, wet reflective ground (add `rain` particles) |
+| `spooky` | haunted scenes | purple dusk, green moonlight, ground fog, stars |
+| `desert` | sand/noon | hot high sun, hard shadows, warm haze |
+| `toon` | graphic/cartoon | **ink outlines**, no bevels, flat bright background |
 
 Combine: `['golden', 'clay']`, `['neon', { fog: { amount: 0.3 } }]`.
 
@@ -32,7 +37,8 @@ Combine: `['golden', 'clay']`, `['neon', { fog: { amount: 0.3 } }]`.
 **background** — composited after tone mapping, so these are exactly the colors you see.
 `type: 'solid' | 'linear' | 'radial'`, `colors: [a, b]` or `[a, mid, b]` (linear: top→bottom; radial:
 center→edge), `angle` (linear, deg), `center: [x, y]` + `radius` (radial, screen units), `power` (curve),
-`mid` (position of the middle color), `noise` (dither, keep ~0.006). Make the page `<body>` background
+`mid` (position of the middle color), `noise` (dither, keep ~0.006), `stars` (brightness 0.6–1.2, or
+`{ amount, density: 0.05, size: 1, horizon: 0.25 }` — twinkling, fading toward the bottom). Make the page `<body>` background
 match `colors.at(-1)` so there's no flash (new.mjs does).
 
 **sun** — the shadow-casting directional light. `color`, `intensity` (daylight ~2.5–3, night ~0.5–1.5),
@@ -83,6 +89,9 @@ the background)`.
 
 **vignette** `{ amount, softness, roundness, color }` · **grain** `{ amount (0.02), size }` · **chromatic**
 (aberration, 0..1) · **dither** (1).
+
+**outline** `{ amount (0 = off, ~0.85 toon), color, width (px), threshold (relative depth jump, 0.015) }` —
+ink lines on silhouettes and depth creases, drawn over everything.
 
 **ground** — the infinite floor under the model, invisible except for what it catches:
 `type: 'shadow' | 'none'`, `opacity` (sun shadow darkness), `color` (shadow tint — use a dark saturated

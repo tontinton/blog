@@ -16,6 +16,7 @@ export const DEFAULT_LOOK = {
     center: [0.5, 0.55], radius: 0.8, // radial
     power: 1, mid: 0.5,      // gradient curve, position of the middle color
     noise: 0.006,            // dithering noise to avoid banding
+    stars: 0,                // twinkling stars: brightness (0.6–1.2), or { amount, density: 0.05, size: 1, horizon: 0.25 }
   },
   sun: {
     color: '#fff3e2', intensity: 2.4,
@@ -67,6 +68,7 @@ export const DEFAULT_LOOK = {
   grain: { amount: 0.02, size: 1 },
   chromatic: 0,
   dither: 1,
+  outline: { amount: 0, color: '#1a1410', width: 1, threshold: 0.015 }, // ink lines on depth edges (toon look)
   ground: {
     type: 'shadow',          // 'shadow' (shadow catcher over the background) | 'none'
     opacity: 0.32,           // shadow darkness
@@ -170,6 +172,69 @@ export const LOOKS = {
     voxel: { saturation: 0, jitter: 0.4, bevel: 0.15 },
     bloom: { enabled: false },
     grade: { contrast: 1.05, saturation: 1 },
+  },
+
+  /** moonlit night (not neon): deep blue sky with stars, cool moonlight, warm windows. */
+  night: {
+    background: { type: 'linear', colors: ['#0a1030', '#1a2a5a', '#2a3a6a'], mid: 0.6, stars: 0.9 },
+    sun: { color: '#a9b8ff', intensity: 0.9, azimuth: 220, elevation: 40, softness: 2 },
+    fill: { color: '#ffb070', intensity: 0.15, azimuth: 40, elevation: 20 },
+    sky: { top: '#2a3a7a', horizon: '#3a4a7a', bottom: '#10142a', intensity: 0.5, sunGlow: 0.2 },
+    voxel: { emissive: 1.2, bakedLight: 1.5 },
+    bloom: { strength: 0.5, threshold: 1.3 },
+    grade: { contrast: 1.05, saturation: 1.05, temperature: -0.1 },
+    vignette: { amount: 0.3, color: '#02030a' },
+    ground: { opacity: 0.35, color: '#000010' },
+  },
+
+  /** overcast rain: soft shadowless light, grey-blue haze (add stage.particles({ preset: 'rain' })). */
+  rainy: {
+    background: { type: 'linear', colors: ['#8a97a8', '#5f6b7c'] },
+    sun: { color: '#e8eef8', intensity: 0.9, azimuth: 30, elevation: 70, softness: 6 },
+    sky: { top: '#c8d2e0', horizon: '#9aa6b6', bottom: '#4a5260', intensity: 1.3, sunGlow: 0 },
+    voxel: { ao: 0.8, rayAO: 1 },
+    water: { strength: 2.5, speed: 1.6 },
+    fog: { amount: 0.35, near: 0.1, far: 1.4 },
+    grade: { contrast: 0.95, saturation: 0.8, temperature: -0.15 },
+    vignette: { amount: 0.2 },
+    ground: { opacity: 0.15, contact: 0.5, reflect: 0.25, blur: 0.6 },
+  },
+
+  /** spooky: purple dusk, sickly green moonlight, ground fog. */
+  spooky: {
+    background: { type: 'radial', colors: ['#3a2a4a', '#120a1c'], center: [0.5, 0.65], radius: 0.9, stars: 0.5 },
+    sun: { color: '#a8ffb0', intensity: 1.1, azimuth: 200, elevation: 35, softness: 2.5 },
+    fill: { color: '#c060ff', intensity: 0.4, azimuth: 30, elevation: 15 },
+    sky: { top: '#3a2a5a', horizon: '#2a3a2a', bottom: '#0a0a10', intensity: 0.5 },
+    voxel: { emissive: 1.4, bakedLight: 1.5, ao: 0.8 },
+    bloom: { strength: 0.6, threshold: 1.2 },
+    fog: { amount: 0.45, near: -0.2, far: 1.2, color: '#4a5a4a' },
+    grade: { contrast: 1.1, saturation: 0.9, tint: -0.1, lift: [0.02, 0.0, 0.04] },
+    vignette: { amount: 0.45, color: '#05000a' },
+    ground: { opacity: 0.4, color: '#000000' },
+  },
+
+  /** desert noon: hot high sun, hard shadows, warm haze. */
+  desert: {
+    background: { type: 'linear', colors: ['#f7d9a8', '#e8b07a'] },
+    sun: { color: '#fff1d0', intensity: 3.2, azimuth: 30, elevation: 68, softness: 1 },
+    sky: { top: '#9cc8ff', horizon: '#ffe8c0', bottom: '#c08a5a', intensity: 1.0 },
+    fog: { amount: 0.2, near: 0.3, far: 1.6 },
+    grade: { contrast: 1.08, saturation: 1.1, temperature: 0.2 },
+    ground: { opacity: 0.45, color: '#5a2a08' },
+  },
+
+  /** toon: ink outlines, crisp cubes, punchy color. */
+  toon: {
+    background: { type: 'solid', colors: ['#f2ead8'] },
+    sun: { intensity: 2.6, softness: 0.8 },
+    sky: { intensity: 1.1 },
+    voxel: { bevel: 0, ao: 0.45, rayAO: 0.4, edge: 0, jitter: 0.5 },
+    outline: { amount: 0.85, width: 1.2, threshold: 0.012 },
+    bloom: { enabled: false },
+    grade: { contrast: 1.1, saturation: 1.2 },
+    vignette: { amount: 0 },
+    grain: { amount: 0 },
   },
 
   /** snow day: cold, bright, blue shadows. */

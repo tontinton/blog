@@ -29,6 +29,7 @@ export const PARTICLE_PRESETS = {
   petals: { count: 160, motion: 'fall', shape: 'cube', lit: true, colors: ['#ffc4d6', '#ff9fbf', '#fff0f4'], size: 0.4, flat: 0.15, spin: 2, speed: 0.35, sway: 2, opacity: 1 },
   leaves: { count: 120, motion: 'fall', shape: 'cube', lit: true, colors: ['#e0a040', '#c8642a', '#9ab040'], size: 0.45, flat: 0.15, spin: 1.5, speed: 0.35, sway: 2, opacity: 1 },
   cubes: { count: 40, motion: 'float', shape: 'cube', lit: true, colors: ['#ffe6c4', '#ffd0d8', '#fff3d6'], size: 0.6, sizeJitter: 0.4, spin: 0.3, speed: 0.4, turbulence: 0.6, opacity: 1, glow: 0.35 },
+  mist: { count: 70, motion: 'plume', shape: 'soft', colors: ['#ffffff', '#e8f4ff'], size: 1.6, sizeJitter: 0.5, glow: 1.1, speed: 0.08, sway: 1.5, turbulence: 0.8, opacity: 0.35, fade: 0.5 },
   smoke: { count: 60, motion: 'plume', shape: 'soft', colors: ['#d9d9d9', '#bfbfbf'], size: 2.2, sizeJitter: 0.4, glow: 0.9, speed: 0.15, sway: 1, turbulence: 0.5, opacity: 0.55, fade: 0.5 },
 };
 
