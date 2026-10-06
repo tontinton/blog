@@ -1,0 +1,44 @@
+<header>
+    <div class="main">
+        <a href={{ config.base_url }}>{{ config.title }}</a>
+
+        <div class="socials">
+            {% for social in config.extra.socials %}
+            <a rel="me" href="{{ social.url }}" class="social">
+                <img alt={{ social.name }} src="/social_icons/{{ social.icon }}.svg" width="24" height="24">
+            </a>
+            {% endfor %}
+        </div>
+    </div>
+
+    <nav>
+        {% for menu in config.extra.menu %}
+        <a href={{ menu.url }} style="margin-left: 0.7em">{{ menu.name }}</a>
+        {% endfor %}
+
+        <a id="tenochtitlan-link" href="/tenochtitlan/" title="Tenochtitlan, 1519" aria-label="Explore Tenochtitlan in 1519" style="margin-left: 0.7em">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M2 21h20" />
+                <path d="M3 21v-3h2.5v-3H8v-3h8v3h2.5v3H21v3" />
+                <path d="M12 21v-9" />
+                <path d="M8 12V6.5h2.5V12M13.5 12V6.5H16V12" />
+            </svg>
+        </a>
+        <style>
+            #tenochtitlan-link { display: inline-flex; align-items: center; border-bottom: none; transition: color .2s, transform .2s; }
+            #tenochtitlan-link:hover { background-color: transparent; color: var(--primary-color); transform: translateY(-1px); }
+            @media (prefers-reduced-motion: reduce) { #tenochtitlan-link, #tenochtitlan-link:hover { transition: none; transform: none; } }
+            /* The theme forces the sun icon visible with !important, so in light mode it stays in the layout as an
+               invisible 16px gap before the moon. Hide it so the toggle keeps the same width in both modes. */
+            html.light #sun-icon { display: none !important; }
+        </style>
+
+        {% if config.extra.theme == "toggle" %}
+        <a id="dark-mode-toggle" onclick="toggleTheme()" href="javascript:void(0)" style="margin-left: 0.7em">
+            <img src="/feather/sun.svg" id="sun-icon" style="filter: invert(1);" width="16" height="16" />
+            <img src="/feather/moon.svg" id="moon-icon" width="16" height="16" />
+        </a>
+        <script src="/js/themetoggle.js"></script>
+        {% endif %}
+    </nav>
+</header>
