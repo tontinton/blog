@@ -25,6 +25,8 @@ export const DEFAULT_LOOK = {
     elevation: 52,           // degrees above the horizon
     shadow: true, softness: 1.6, mapSize: 4096, bias: -0.0002, normalBias: 0.04,
     follow: false,           // true: sun stays fixed relative to the camera (lighting never changes as you orbit)
+    update: 'always',        // shadow map refresh: 'always' | 'static' (only when something changes — big static
+                             // worlds; swaying leaves/actors keep their old shadows) | N (every N frames)
   },
   fill: { color: '#c8d8ff', intensity: 0, azimuth: 220, elevation: 25 }, // shadowless second light (rim / bounce)
   sky: {                     // image-based ambient + reflections (generated gradient environment)

@@ -22,13 +22,21 @@ const fibDirs = (k) => {
 };
 
 /** Dense occupancy (1 = solid opaque) over the grid bounds + margin. */
-function occupancy(grid, cls, margin) {
+/** inclusive box of the grid (or `region` ∩ grid), grown by `margin` */
+function box(grid, region, margin) {
   const b = grid.bounds();
-  const min = [b.min[0] - margin, b.min[1] - margin, b.min[2] - margin];
-  const size = [b.size[0] + 2 * margin, b.size[1] + 2 * margin, b.size[2] + 2 * margin];
+  const lo = [0, 1, 2].map((k) => Math.max(b.min[k], region ? region.min[k] : -Infinity) - margin);
+  const hi = [0, 1, 2].map((k) => Math.min(b.max[k], region ? region.max[k] : Infinity) + margin);
+  return { lo, hi };
+}
+
+/** Dense occupancy (1 = solid opaque) over the grid (or region) bounds + margin. */
+function occupancy(grid, cls, margin, region) {
+  const { lo: min, hi } = box(grid, region, margin);
+  const size = [hi[0] - min[0] + 1, hi[1] - min[1] + 1, hi[2] - min[2] + 1];
   const occ = new Uint8Array(size[0] * size[1] * size[2]);
   const sx = 1, sz = size[0], sy = size[0] * size[2];
-  grid.forEach((x, y, z, id) => {
+  grid.forEachIn(min, hi, (x, y, z, id) => {
     const c = cls[id];
     if (c) occ[(x - min[0]) * sx + (z - min[2]) * sz + (y - min[1]) * sy] = c;
   });
@@ -39,6 +47,7 @@ export class Baker {
   /**
    * opts.ao:    { radius = 6, rays = 20, strength handled in shader }  (true → defaults)
    * opts.light: true | { scale = 1 }   (only used if the palette has `light` materials)
+   * opts.region: { min, max } — only bake around this box (clusters); voxels outside still occlude/emit
    */
   constructor(grid, palette, cls, opts = {}) {
     this.grid = grid;
@@ -48,7 +57,7 @@ export class Baker {
     this.radius = ao?.radius ?? 6;
     this.dirs = [];
     const margin = Math.ceil(this.radius) + 1;
-    this.vol = occupancy(grid, cls, margin);
+    this.vol = occupancy(grid, cls, margin, opts.region);
     if (this.aoOn) {
       const base = fibDirs(ao.rays ?? 20);
       // rotate the +Z hemisphere set to each of the 6 face normals (dir index: 0 +x, 1 -x, 2 +y, 3 -y, 4 +z, 5 -z)
@@ -58,7 +67,7 @@ export class Baker {
       }
     }
     this.light = null;
-    if (opts.light) this.light = bakeLight(grid, palette, cls, opts.light === true ? {} : opts.light);
+    if (opts.light) this.light = bakeLight(grid, palette, cls, opts.light === true ? {} : opts.light, opts.region);
   }
 
   /** occupancy at world cell (outside volume = empty) */
@@ -106,13 +115,15 @@ export class Baker {
   }
 }
 
-function bakeLight(grid, palette, cls, opts) {
+function bakeLight(grid, palette, cls, opts, region) {
   const scale = opts.scale ?? 1;
   // group sources by (color, intensity, radius)
   const groups = new Map();
   const lightOf = palette.defs.map((d) => d?.light ?? null);
+  const reach = Math.ceil(Math.max(0, ...lightOf.map((l) => l?.radius ?? 0))) + 1;
+  const src = box(grid, region, reach);
   let maxR = 0;
-  grid.forEach((x, y, z, id) => {
+  grid.forEachIn(src.lo, src.hi, (x, y, z, id) => {
     const L = lightOf[id];
     if (!L) return;
     const k = `${L.key}|${L.intensity}|${L.radius}|${L.falloff}`;
@@ -122,8 +133,9 @@ function bakeLight(grid, palette, cls, opts) {
     maxR = Math.max(maxR, L.radius);
   });
   if (!groups.size) return null;
-  // field bounds = sources ± radius, clipped to grid bounds ± 1
-  const b = grid.bounds();
+  // field bounds = sources ± radius, clipped to the grid (or region) bounds ± 1
+  const { lo: bmin, hi: bmax } = box(grid, region, 1);
+  const b = { min: bmin.map((v) => v + 1), max: bmax.map((v) => v - 1) };
   const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
   for (const g of groups.values()) {
     const R = Math.ceil(g.L.radius) + 1;

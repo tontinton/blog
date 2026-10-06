@@ -18,6 +18,7 @@ import { CHUNK, CHUNK_BITS } from './constants.js';
 const M = CHUNK - 1;
 const OFF = 1024; // chunk coords are biased so keys stay positive (±32k voxels per axis)
 const key = (cx, cy, cz) => ((cx + OFF) * 2048 + (cy + OFF)) * 2048 + (cz + OFF);
+export const chunkKey = key;
 
 export class VoxelGrid {
   constructor(palette = null) {
@@ -45,6 +46,16 @@ export class VoxelGrid {
     }
     this._lk = k; this._lc = c;
     return c;
+  }
+
+  /** Take ownership of a raw chunk { cx, cy, cz, data } (merging non-empty voxels if one exists). */
+  adopt(c) {
+    const k = key(c.cx, c.cy, c.cz);
+    const ex = this.chunks.get(k);
+    if (!ex) this.chunks.set(k, { cx: c.cx, cy: c.cy, cz: c.cz, data: c.data });
+    else { const d = c.data, e = ex.data; for (let i = 0; i < d.length; i++) if (d[i]) e[i] = d[i]; }
+    this._lk = -1; this._lc = null; this._b = undefined;
+    return this;
   }
 
   get(x, y, z) {
@@ -106,6 +117,21 @@ export class VoxelGrid {
       for (let i = 0; i < d.length; i++) {
         const v = d[i];
         if (v) fn(ox + (i & M), oy + (i >> (2 * CHUNK_BITS)), oz + ((i >> CHUNK_BITS) & M), v);
+      }
+    }
+  }
+
+  /** Visit voxels inside an inclusive box (fast: only touches overlapping chunks). */
+  forEachIn(a, b, fn) {
+    const C = CHUNK;
+    for (const c of this.chunks.values()) {
+      const ox = c.cx * C, oy = c.cy * C, oz = c.cz * C;
+      if (ox > b[0] || oy > b[1] || oz > b[2] || ox + C - 1 < a[0] || oy + C - 1 < a[1] || oz + C - 1 < a[2]) continue;
+      const x0 = Math.max(0, a[0] - ox), x1 = Math.min(C - 1, b[0] - ox), y0 = Math.max(0, a[1] - oy), y1 = Math.min(C - 1, b[1] - oy), z0 = Math.max(0, a[2] - oz), z1 = Math.min(C - 1, b[2] - oz);
+      const d = c.data;
+      for (let y = y0; y <= y1; y++) for (let z = z0; z <= z1; z++) {
+        const row = (z << CHUNK_BITS) | (y << (2 * CHUNK_BITS));
+        for (let x = x0; x <= x1; x++) { const v = d[row | x]; if (v) fn(ox + x, oy + y, oz + z, v); }
       }
     }
   }

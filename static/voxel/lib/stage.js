@@ -9,7 +9,13 @@
 // URL params (handy while iterating): ?look=neon ?yaw=30 ?pitch=20 ?zoom=1.3 ?t=4 (freeze time)
 //   ?debug (live tweak panel + stats) ?shot (no UI, deterministic; used by voxel/tools/shot.mjs) ?dpr=1
 import * as THREE from './three.js';
-import { buildMesh } from './mesher.js';
+import { buildMesh, geometryFromArrays } from './mesher.js';
+import { clusterChunks, clusterInputs } from './cluster.js';
+import { chunkKey, VoxelGrid } from './grid.js';
+import { getPool } from './pool.js';
+import { Palette } from './palette.js';
+import { runRegion, runAssets, mergeInto, loadPaletteDefs } from './world.js';
+import { combineHooks } from './registry.js';
 import { createVoxelUniforms, createVoxelMaterial, createVoxelDepthMaterial } from './material.js';
 import { Post } from './post.js';
 import { resolveLook, merge } from './looks.js';
@@ -110,34 +116,164 @@ export class Stage {
    *       pivot [x,y,z] (grid coords) — group origin at this voxel (rotate a windmill blade around its hub),
    *       instances [[x, y, z, rotYdeg?, scale?] | { position, rotation, scale }] — draw many copies in one call,
    *       bake { ao: true | { radius, rays }, light: true }, ao (vertex AO, true), greedy (true),
-   *       hooks (custom GLSL, see material.js), shadow (cast, true), receive (true), fit (include in camera fit, true),
-   *       contact (contribute to ground contact shadow, true), name
+   *       cluster (4): mesh as columns of N×N chunks (frustum-culled, rebuilt independently); 0 = one mesh,
+   *       hooks (custom GLSL, see material.js), shading ('cel' | ['cel', 'rim'] — registered hook bundles),
+   *       shadow (cast, true), receive (true), fit (include in camera fit, true),
+   *       contact (contribute to ground contact shadow, true), keepGrid (true; false frees voxel memory after meshing), name
    */
   add(grid, opts = {}) {
+    const model = this._newModel(grid, opts);
+    this._mesh(model);
+    return this._attach(model);
+  }
+
+  /**
+   * Like add() but meshes clusters in parallel Web Workers (keeps the page responsive; much faster for big
+   * grids). Resolves to the group. opts as add() plus workers (0 = main thread), onProgress(fraction).
+   */
+  async addAsync(grid, opts = {}) {
+    const model = this._newModel(grid, opts);
+    const pool = opts.workers === 0 ? null : getPool(opts.workers);
+    if (pool) await this._meshParallel(model, pool, opts.onProgress);
+    else this._mesh(model);
+    return this._attach(model);
+  }
+
+  /**
+   * Build a big scene from region modules in parallel workers, then mesh it in parallel. See world.js for the
+   * region/palette/assets module contracts. spec:
+   *   palette: './palette.js' (module URL, default export = defs) | defs object | Palette
+   *   regions: [{ module: './regions/a.js', name, box: [[x0,y0,z0],[x1,y1,z1]], seed, options }]
+   *   assets: './assets.js'  (instanced models referenced by ctx.instance(name, ...))
+   *   bake ({ ao: true, light: true }), cluster (4), workers ('auto' | n | 0), keepGrid (true), model: {...add() opts}
+   *   assetBake ({ ao: true }), onExtra(extra) for custom ctx.emit kinds
+   * ?region=a,b (URL) builds only those regions — test one region in isolation.
+   * Resolves to { group, grid, palette, assets: { name: group }, extras, stats }.
+   */
+  async world(spec) {
+    const t0 = performance.now();
+    const abs = (u) => new URL(u, location.href).href;
+    const P = spec.palette instanceof Palette ? spec.palette
+      : new Palette(typeof spec.palette === 'string' ? await loadPaletteDefs(abs(spec.palette)) : spec.palette ?? {});
+    const only = (params.get('region') ?? spec.only ?? '').toString().split(',').filter(Boolean);
+    const regions = spec.regions
+      .map((r) => ({ ...r, module: abs(r.module), name: r.name ?? r.module.split('/').pop().replace(/\.js$/, '') }))
+      .filter((r) => !only.length || only.includes(r.name));
+    if (!regions.length) throw new Error(`stage.world: no regions${only.length ? ` match ?region=${only}` : ''}`);
+    const pool = spec.workers === 0 ? null : getPool(spec.workers === 'auto' ? undefined : spec.workers);
+    const list = P.serialize();
+    let done = 0;
+    const step = (label, f) => this.progress(label, f);
+    await step(`Building ${regions.length} regions`, 0.05);
+    const results = await Promise.all(regions.map((r) => (pool ? pool.run({ type: 'region', region: r, palette: list }) : runRegion(r, list))
+      .then(async (res) => { await step(`Built ${res.name}`, 0.05 + 0.45 * (++done / regions.length)); return res; })));
+    const grid = new VoxelGrid(P);
+    const extras = [], instances = new Map(), timing = {};
+    for (const res of results) {
+      mergeInto(grid, P, res);
+      extras.push(...res.extras);
+      timing[res.name] = res.ms;
+      if (res.dropped) console.warn(`voxel: region "${res.name}" wrote ${res.dropped} voxels outside its box (dropped)`);
+      for (const [asset, ...it] of res.instances) { if (!instances.has(asset)) instances.set(asset, []); instances.get(asset).push(it); }
+    }
+    const tGen = performance.now() - t0;
+    await step('Meshing', 0.55);
+    const group = await this.addAsync(grid, {
+      bake: spec.bake ?? { ao: true, light: true }, cluster: spec.cluster, workers: pool ? undefined : 0,
+      keepGrid: spec.keepGrid, ...(spec.model ?? {}), palette: P,
+      onProgress: (f) => step('Meshing', 0.55 + 0.35 * f),
+    });
+    // instanced assets
+    const assets = {};
+    if (instances.size) {
+      if (!spec.assets) throw new Error('regions used ctx.instance() but stage.world() got no `assets` module');
+      await step('Assets', 0.92);
+      const names = [...instances.keys()];
+      const built = pool ? await pool.run({ type: 'assets', url: abs(spec.assets), names, palette: P.serialize() }) : await runAssets(abs(spec.assets), names, P.serialize());
+      for (const name of names) {
+        const ag = new VoxelGrid(P);
+        mergeInto(ag, P, built[name]);
+        assets[name] = await this.addAsync(ag, { bake: spec.assetBake ?? { ao: true }, palette: P, name, workers: pool ? undefined : 0, instances: instances.get(name), cluster: 0 });
+      }
+    }
+    // extras: particles, lights, actors, custom
+    for (const e of extras) {
+      if (e.kind === 'particles') this.particles(e.data);
+      else if (e.kind === 'light') this.light(e.data);
+      else if (e.kind === 'actors' && this.actors) this.actors(e.data);
+      else spec.onExtra?.(e);
+    }
+    const stats = { regions: regions.length, generateMs: Math.round(tGen), totalMs: Math.round(performance.now() - t0), workers: pool?.size ?? 0, perRegionMs: timing, ...group.userData.model.stats };
+    console.log('voxel world', JSON.stringify(stats));
+    return { group, grid: group.userData.model.grid, palette: P, assets, extras, stats };
+  }
+
+  _newModel(grid, opts) {
     const palette = opts.palette ?? grid.palette;
     if (!palette) throw new Error('stage.add: grid has no palette (new VoxelGrid(palette) or opts.palette)');
+    if (!grid.palette) grid.palette = palette;
     const group = new THREE.Group();
     group.name = opts.name ?? 'voxels';
     const inner = new THREE.Group();
     group.add(inner);
-    const model = { group, inner, grid, palette, opts, uniforms: { ...this.uniforms, uMat: { value: palette.texture() } } };
+    const model = { group, inner, grid, palette, opts, meshes: [], uniforms: { ...this.uniforms, uMat: { value: palette.texture() } } };
     group.userData.model = model;
-    this._mesh(model);
+    return model;
+  }
+
+  _attach(model) {
+    const { group, opts } = model;
     if (opts.position) group.position.set(...opts.position);
     if (opts.rotation != null) Array.isArray(opts.rotation) ? group.rotation.set(...opts.rotation.map((d) => d * DEG)) : (group.rotation.y = opts.rotation * DEG);
     if (opts.scale != null) Array.isArray(opts.scale) ? group.scale.set(...opts.scale) : group.scale.setScalar(opts.scale);
     this.root.add(group);
     this.models.push(model);
     this._layoutDirty = true;
+    this._shadowDirty = true;
+    if (opts.keepGrid === false) { this._fitGroundFor(model); model.grid = null; }
     return group;
   }
 
+  _meshOpts(model) { const o = model.opts; return { bake: o.bake, ao: o.ao, greedy: o.greedy }; }
+
+  _clusters(model) {
+    const size = model.opts.cluster ?? 4;
+    const all = [...model.grid.chunks.values()];
+    if (!size) return [{ chunks: all, min: null, max: null, whole: true }];
+    const cl = clusterChunks(model.grid, size);
+    if (cl.length <= 1) return [{ chunks: all, min: null, max: null, whole: true }];
+    return cl;
+  }
+
   _mesh(model) {
-    const { grid, palette, opts, inner, uniforms } = model;
     const t0 = performance.now();
-    for (const c of [...inner.children]) { inner.remove(c); c.geometry?.dispose(); c.material?.dispose(); c.customDepthMaterial?.dispose(); c.customDistanceMaterial?.dispose(); }
-    const res = buildMesh(grid, palette, { bake: opts.bake, ao: opts.ao, greedy: opts.greedy });
-    const light = !!res.solid?.attributes.aLight || !!res.transparent?.attributes.aLight;
+    const results = this._clusters(model).map((cl) => buildMesh(model.grid, model.palette, { ...this._meshOpts(model), chunks: cl.chunks, bounds: cl.whole ? undefined : { min: cl.min, max: cl.max } }));
+    this._buildMeshes(model, results, t0);
+  }
+
+  async _meshParallel(model, pool, onProgress) {
+    const t0 = performance.now();
+    const { grid, palette } = model;
+    const list = palette.serialize();
+    const clusters = this._clusters(model);
+    let done = 0;
+    const results = await Promise.all(clusters.map((cl) => {
+      const inputs = cl.whole ? cl.chunks : clusterInputs(grid, cl, 1);
+      return pool.run({
+        type: 'mesh', palette: list, opts: this._meshOpts(model),
+        chunks: inputs.map((c) => ({ cx: c.cx, cy: c.cy, cz: c.cz, data: c.data })),
+        emit: cl.chunks.map((c) => chunkKey(c.cx, c.cy, c.cz)),
+        bounds: cl.whole ? undefined : { min: cl.min, max: cl.max },
+      }).then((r) => { onProgress?.(++done / clusters.length); return r; });
+    }));
+    this._buildMeshes(model, results.map((r) => ({ ...r, solid: geometryFromArrays(r.solid), transparent: geometryFromArrays(r.transparent) })), t0);
+  }
+
+  _buildMeshes(model, results, t0) {
+    const { grid, opts, inner, uniforms } = model;
+    this._clearMeshes(model);
+    const light = results.some((r) => r.solid?.attributes.aLight || r.transparent?.attributes.aLight);
+    const hooks = combineHooks(opts.hooks, opts.shading);
     const b = grid.bounds();
     if (opts.pivot) inner.position.set(-opts.pivot[0], -opts.pivot[1], -opts.pivot[2]);
     else if (b && opts.center) {
@@ -145,6 +281,14 @@ export class Stage {
       inner.position.set(-(b.min[0] + b.size[0] / 2), c === 'center' ? -(b.min[1] + b.size[1] / 2) : -b.min[1], -(b.min[2] + b.size[2] / 2));
     } else inner.position.set(0, 0, 0);
     const inst = opts.instances?.map(instanceMatrix);
+    // one set of materials per model, shared by all of its cluster meshes
+    const mats = {
+      solid: createVoxelMaterial({ uniforms, light, hooks }),
+      depth: createVoxelDepthMaterial({ uniforms, hooks }),
+      distance: createVoxelDepthMaterial({ uniforms, hooks, distance: true }),
+      transparent: results.some((r) => r.transparent) ? createVoxelMaterial({ uniforms, light, transparent: true, transmission: this.look.water.transmission, hooks }) : null,
+    };
+    model.materials = mats;
     const make = (geo, mat) => {
       if (!inst) return new THREE.Mesh(geo, mat);
       const m = new THREE.InstancedMesh(geo, mat, inst.length);
@@ -153,33 +297,48 @@ export class Stage {
       m.computeBoundingBox(); m.computeBoundingSphere();
       return m;
     };
-    model.solid = model.transparent = null;
-    if (res.solid) {
-      const mesh = make(res.solid, createVoxelMaterial({ uniforms, light, hooks: opts.hooks }));
-      mesh.customDepthMaterial = createVoxelDepthMaterial({ uniforms, hooks: opts.hooks });
-      mesh.customDistanceMaterial = createVoxelDepthMaterial({ uniforms, hooks: opts.hooks, distance: true });
-      mesh.castShadow = opts.shadow !== false; mesh.receiveShadow = opts.receive !== false;
-      mesh.frustumCulled = false;
-      inner.add(mesh);
-      model.solid = mesh;
+    const cull = results.length > 1 || !!inst;
+    const stats = { quads: 0, triangles: 0, bakeMs: 0, lights: 0, clusters: results.length };
+    for (const r of results) {
+      if (r.solid) {
+        const mesh = make(r.solid, mats.solid);
+        mesh.customDepthMaterial = mats.depth;
+        mesh.customDistanceMaterial = mats.distance;
+        mesh.castShadow = opts.shadow !== false; mesh.receiveShadow = opts.receive !== false;
+        mesh.frustumCulled = cull;
+        inner.add(mesh);
+        model.meshes.push(mesh);
+      }
+      if (r.transparent) {
+        const mesh = make(r.transparent, mats.transparent);
+        mesh.receiveShadow = true; mesh.castShadow = false; mesh.frustumCulled = cull;
+        mesh.renderOrder = 1;
+        inner.add(mesh);
+        model.meshes.push(mesh);
+      }
+      stats.quads += r.stats.quads; stats.triangles += r.stats.triangles; stats.bakeMs += r.stats.bakeMs; stats.lights = Math.max(stats.lights, r.stats.lights);
     }
-    if (res.transparent) {
-      const mesh = make(res.transparent, createVoxelMaterial({ uniforms, light, transparent: true, transmission: this.look.water.transmission, hooks: opts.hooks }));
-      mesh.receiveShadow = true; mesh.castShadow = false; mesh.frustumCulled = false;
-      mesh.renderOrder = 1;
-      inner.add(mesh);
-      model.transparent = mesh;
-    }
+    model.solid = model.meshes.find((m) => m.material === mats.solid) ?? null;
+    model.transparent = model.meshes.find((m) => m.material === mats.transparent) ?? null;
     model.group.userData.solid = model.solid;
     model.group.userData.transparent = model.transparent;
     model.instances = inst ?? null;
-    model.stats = { ...res.stats, voxels: grid.count() * (inst?.length ?? 1), ms: Math.round(performance.now() - t0) };
+    model.stats = { ...stats, voxels: grid.count() * (inst?.length ?? 1), ms: Math.round(performance.now() - t0) };
+  }
+
+  _clearMeshes(model) {
+    for (const c of [...model.inner.children]) { model.inner.remove(c); c.geometry?.dispose(); }
+    if (model.materials) for (const m of Object.values(model.materials)) m?.dispose();
+    model.meshes = [];
   }
 
   /** Re-mesh a model after editing its grid (or its opts, e.g. group.userData.model.opts.bake). */
   rebuild(group) {
-    this._mesh(group.userData.model);
+    const m = group.userData.model;
+    if (!m.grid) throw new Error('stage.rebuild: model was added with keepGrid: false');
+    this._mesh(m);
     this._layoutDirty = true;
+    this._shadowDirty = true;
     return group;
   }
 
@@ -187,8 +346,10 @@ export class Stage {
     const m = group.userData.model;
     this.models = this.models.filter((x) => x !== m);
     group.removeFromParent();
-    group.traverse((o) => { o.geometry?.dispose(); o.material?.dispose?.(); o.customDepthMaterial?.dispose(); });
+    if (m) this._clearMeshes(m);
+    else group.traverse((o) => { o.geometry?.dispose(); o.material?.dispose?.(); });
     this._layoutDirty = true;
+    this._shadowDirty = true;
   }
 
   /**
@@ -200,16 +361,18 @@ export class Stage {
     const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
     const ray = new THREE.Raycaster();
     ray.setFromCamera(ndc, this.camera);
-    const meshes = this.models.flatMap((m) => [m.solid, m.transparent].filter(Boolean));
-    const hit = ray.intersectObjects(meshes, false)[0];
+    const owner = new Map();
+    for (const m of this.models) for (const mesh of m.meshes) owner.set(mesh, m);
+    const hit = ray.intersectObjects([...owner.keys()], false)[0];
     if (!hit) return null;
-    const model = this.models.find((m) => m.solid === hit.object || m.transparent === hit.object);
+    const model = owner.get(hit.object);
     const M = hit.object.matrixWorld.clone();
     if (hit.instanceId != null) M.multiply(model.instances[hit.instanceId]);
     const local = hit.point.clone().applyMatrix4(M.invert());
     const n = hit.face.normal;
     const voxel = [Math.floor(local.x - n.x * 0.5), Math.floor(local.y - n.y * 0.5), Math.floor(local.z - n.z * 0.5)];
-    const id = model.grid.get(...voxel);
+    const info = hit.object.geometry.attributes.aInfo;
+    const id = model.grid ? model.grid.get(...voxel) : info.getX(hit.face.a) + info.getY(hit.face.a) * 256;
     return { model, group: model.group, voxel, id, name: model.palette.defs[id]?.name ?? null, normal: [n.x, n.y, n.z], point: hit.point, instance: hit.instanceId ?? null };
   }
 
@@ -277,6 +440,7 @@ export class Stage {
     setLin(this.ambient.color, L.ambient.color); this.ambient.intensity = L.ambient.intensity;
     this._makeEnv();
     this.post.applyLook(L);
+    this._shadowDirty = true;
     const g = this.ground.material;
     g.visible = L.ground.type !== 'none';
     this.ground.visible = L.ground.type !== 'none';
@@ -380,6 +544,7 @@ export class Stage {
     this._frameCamera();
     this._fitShadow();
     this._fitGround();
+    this._shadowDirty = true;
   }
 
   _frameCamera() {
@@ -397,6 +562,7 @@ export class Stage {
   }
 
   _fitShadow() {
+    this._shadowDirty = true;
     const L = this.look.sun, R = this.radius * 1.05, c = this.bounds.getCenter(new THREE.Vector3());
     const d = sunDir(L.azimuth, L.elevation);
     if (L.follow) d.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.controls.getAzimuthalAngle() - this.camOpts.yaw * DEG);
@@ -423,22 +589,20 @@ export class Stage {
     const W = Math.ceil(box.max.x) + pad - x0, D = Math.ceil(box.max.z) + pad - z0;
     if (W * D > 4096 * 4096 || W <= 0 || D <= 0) return;
     const occ = new Float32Array(W * D);
-    const v = new THREE.Vector3();
+    const ch = G.contactHeight;
     for (const m of this.models) {
       if (m.opts.contact === false) continue;
-      const base = m.solid?.matrixWorld ?? m.group.matrixWorld;
-      for (const im of m.instances ?? [null]) {
-      const mat = im ? base.clone().multiply(im) : base;
-      const scl = new THREE.Vector3().setFromMatrixScale(mat).y;
-      m.grid.forEach((x, yy, z) => {
-        v.set(x + 0.5, yy + 0.5, z + 0.5).applyMatrix4(mat);
-        const h = v.y - y;
-        if (h > G.contactHeight * scl) return;
-        const ix = Math.floor(v.x) - x0, iz = Math.floor(v.z) - z0;
-        if (ix < 0 || iz < 0 || ix >= W || iz >= D) return;
-        const k = 1 - h / (G.contactHeight * scl + 1);
+      const mk = m.inner.matrixWorld.elements.join(',') + '|' + ch;
+      if (m.grid && m.contactKey !== mk) this._fitGroundFor(m);
+      const pts = m.contact;
+      if (!pts) continue;
+      for (let i = 0; i < pts.length; i += 3) {
+        const h = pts[i + 1] - y;
+        if (h > ch) continue;
+        const ix = Math.floor(pts[i]) - x0, iz = Math.floor(pts[i + 2]) - z0;
+        if (ix < 0 || iz < 0 || ix >= W || iz >= D) continue;
+        const k = 1 - h / (ch + 1);
         if (k > occ[ix + iz * W]) occ[ix + iz * W] = k;
-      });
       }
     }
     const r = Math.max(1, Math.round(G.contactRadius));
@@ -452,6 +616,35 @@ export class Stage {
     gu.uContact.value?.dispose?.();
     gu.uContact.value = tex;
     gu.uContactBox.value.set(x0, z0, W, D);
+  }
+
+  /** Cache the world positions of a model's lowest voxels (the only ones that can touch the ground). */
+  _fitGroundFor(m) {
+    m.contact = null;
+    if (!m.grid || m.opts.contact === false) return;
+    const b = m.grid.bounds();
+    if (!b) return;
+    this.root.updateMatrixWorld(true);
+    const band = this.look.ground.contactHeight + 1;
+    const base = m.inner.matrixWorld;
+    const pts = [];
+    for (const im of m.instances ?? [null]) {
+      const mat = im ? base.clone().multiply(im) : base.clone();
+      const e = mat.elements;
+      const plain = e[0] === 1 && e[5] === 1 && e[10] === 1 && !e[1] && !e[2] && !e[4] && !e[6] && !e[8] && !e[9];
+      if (plain) {
+        const tx = e[12], ty = e[13], tz = e[14];
+        m.grid.forEachIn(b.min, [b.max[0], b.min[1] + band, b.max[2]], (x, y, z) => pts.push(x + 0.5 + tx, y + 0.5 + ty, z + 0.5 + tz));
+      } else {
+        const v = new THREE.Vector3(), tmp = [];
+        let minY = Infinity;
+        m.grid.forEach((x, y, z) => { v.set(x + 0.5, y + 0.5, z + 0.5).applyMatrix4(mat); tmp.push(v.x, v.y, v.z); if (v.y < minY) minY = v.y; });
+        const lim = band * Math.max(new THREE.Vector3().setFromMatrixScale(mat).y, 1e-3);
+        for (let i = 0; i < tmp.length; i += 3) if (tmp[i + 1] - minY <= lim) pts.push(tmp[i], tmp[i + 1], tmp[i + 2]);
+      }
+    }
+    m.contact = Float32Array.from(pts);
+    m.contactKey = m.inner.matrixWorld.elements.join(',') + '|' + this.look.ground.contactHeight;
   }
 
   resize() {
@@ -506,6 +699,14 @@ export class Stage {
     this.controls.update(dt);
     if (this.look.sun.follow) this._fitShadow();
     this.uniforms.uTime.value = t;
+    // shadow map refresh: 'always' | 'static' (only when something changed) | N (every N frames)
+    const su = this.look.sun.update ?? 'always';
+    this.renderer.shadowMap.autoUpdate = false;
+    this._frameNo = (this._frameNo ?? 0) + 1;
+    if (su === 'always' || this._shadowDirty || (typeof su === 'number' && this._frameNo % Math.max(1, su) === 0)) {
+      this.renderer.shadowMap.needsUpdate = true;
+      this._shadowDirty = false;
+    }
     for (const m of this.models) m.uniforms.uMat.value = m.palette.texture();
     for (const p of this.particleSystems) p.update(t, dt);
     for (const fn of this.updaters) fn(t, dt);
@@ -610,6 +811,7 @@ export class Stage {
       models: this.models.length,
       voxels: this.models.reduce((a, m) => a + m.stats.voxels, 0),
       quads: this.models.reduce((a, m) => a + m.stats.quads, 0),
+      clusters: this.models.reduce((a, m) => a + (m.stats.clusters ?? 1), 0),
       meshMs: this.models.reduce((a, m) => a + m.stats.ms, 0),
       bakeMs: this.models.reduce((a, m) => a + (m.stats.bakeMs ?? 0), 0),
       lightGroups: this.models.reduce((a, m) => a + (m.stats.lights ?? 0), 0),
