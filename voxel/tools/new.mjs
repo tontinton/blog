@@ -32,5 +32,7 @@ writeFileSync(manifest, JSON.stringify(list, null, 2) + '\n');
 writeLinks(list);
 console.log(`created static/voxel/${slug}/ (index.html, scene.js), added it to pieces.json, short link /v/${short}/
 (rename: edit "short" in pieces.json, then node links.mjs; after editing index.html also rerun node links.mjs)
-next:  node shot.mjs /voxel/${slug}/ --views 4          # look at it
-       node shot.mjs /voxel/${slug}/ --size 1200x630 --out ../../static/voxel/${slug}/preview.jpg`);
+next:  node shot.mjs /voxel/${slug}/ --views 4          # look at it, iterate
+       node shot.mjs /voxel/${slug}/ --size 1200x630 --out ../../static/voxel/${slug}/preview.jpg
+       node links.mjs && git commit && git push          # then:
+       node preview.mjs ${short}                          # waits for Cloudflare, prints the live /v/${short}/ link`);
