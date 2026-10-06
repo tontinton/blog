@@ -1,0 +1,15 @@
+{
+  "name": "voxel-tools",
+  "private": true,
+  "type": "module",
+  "description": "Dev tooling for the /voxel art pieces: vendoring three.js, screenshot harness, local server.",
+  "scripts": {
+    "vendor": "node build-vendor.mjs",
+    "shot": "node shot.mjs",
+    "serve": "node serve.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12",
+    "three": "0.186.1"
+  }
+}
