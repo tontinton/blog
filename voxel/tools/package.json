@@ -8,7 +8,8 @@
     "shot": "node shot.mjs",
     "serve": "node serve.mjs",
     "new": "node new.mjs",
-    "check": "node check.mjs"
+    "check": "node check.mjs",
+    "test": "node test.mjs"
   },
   "devDependencies": {
     "esbuild": "0.25.12",

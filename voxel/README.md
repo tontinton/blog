@@ -23,7 +23,7 @@ voxel/               (repo root, NOT published)
   docs/tools.md      screenshot harness, dev server, debugging, performance
   template/          what new.mjs copies
   lab/               unpublished test scenes (also good worked examples), served at /voxel/_lab/?scene=name
-  tools/             new.mjs, shot.mjs, check.mjs (smoke test), serve.mjs, build-vendor.mjs
+  tools/             new.mjs, shot.mjs, test.mjs (unit tests), check.mjs (render smoke test), serve.mjs, build-vendor.mjs
 ```
 
 ## 60-second start

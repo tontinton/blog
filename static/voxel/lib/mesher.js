@@ -7,7 +7,8 @@
 //   aLight    Uint8×4  (baked emissive light rgb, ×4 range)   [only when lights are baked]
 // Face dir: 0 +x, 1 -x, 2 +y, 3 -y, 4 +z, 5 -z. Tangents: u = axis+1, v = axis+2 (mod 3).
 //
-// Faces merge only when every corner carries identical values, so AO/bakes stay exact.
+// Faces merge only when every corner carries identical values, so AO/bakes stay exact; bevel edge bits
+// are derived from the merged rectangle's border.
 import * as THREE from './three.js';
 import { CHUNK, CHUNK_BITS } from './constants.js';
 import { Baker } from './bake.js';
@@ -188,7 +189,7 @@ export function buildMesh(grid, palette, opts = {}) {
             fRAO[k * 4] = fRAO[k * 4 + 1] = fRAO[k * 4 + 2] = fRAO[k * 4 + 3] = 255;
           }
           fUni[k] = greedy && uni ? 1 : 0;
-          fK1[k] = id + a0 * 65536 + mask * 262144 + fRAO[k * 4] * 4194304;
+          fK1[k] = id + a0 * 65536 + fRAO[k * 4] * 262144;
           fK2[k] = useLight ? fLt[k * 12] + fLt[k * 12 + 1] * 256 + fLt[k * 12 + 2] * 65536 : 0;
         }
         if (!sliceAny) continue;
@@ -197,13 +198,23 @@ export function buildMesh(grid, palette, opts = {}) {
           const k = uu + vv * N;
           if (!fId[k] || done[k]) continue;
           let w = 1, h = 1;
+          // Bevel bits are not part of the merge key: edges between merged faces are flat by construction,
+          // so only the rectangle's border must be consistent (each border edge all-convex or all-flat).
+          let qmask = fMask[k];
           if (fUni[k]) {
-            const k1 = fK1[k], k2 = fK2[k];
-            while (uu + w < N) { const j = k + w; if (!(fId[j] && fUni[j] && !done[j] && fK1[j] === k1 && fK2[j] === k2)) break; w++; }
+            const k1 = fK1[k], k2 = fK2[k], vbits = fMask[k] & 12;
+            while (uu + w < N) { const j = k + w; if (!(fId[j] && fUni[j] && !done[j] && fK1[j] === k1 && fK2[j] === k2 && (fMask[j] & 12) === vbits)) break; w++; }
+            const uFirst = fMask[k] & 1, uLast = fMask[k + w - 1] & 2;
             outer: while (vv + h < N) {
-              for (let x = 0; x < w; x++) { const j = k + x + h * N; if (!(fId[j] && fUni[j] && !done[j] && fK1[j] === k1 && fK2[j] === k2)) break outer; }
+              const row = k + h * N, rowV = fMask[row] & 8;
+              for (let x = 0; x < w; x++) {
+                const j = row + x, mj = fMask[j];
+                if (!(fId[j] && fUni[j] && !done[j] && fK1[j] === k1 && fK2[j] === k2)) break outer;
+                if ((mj & 8) !== rowV || (x === 0 && (mj & 1) !== uFirst) || (x === w - 1 && (mj & 2) !== uLast)) break outer;
+              }
               h++;
             }
+            qmask = uFirst | uLast | (fMask[k] & 4) | (fMask[k + (h - 1) * N] & 8);
           }
           for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) done[k + x + y * N] = 1;
           // emit
@@ -211,7 +222,7 @@ export function buildMesh(grid, palette, opts = {}) {
           const qb = out[isT ? 1 : 0];
           if (qb.n === qb.cap) qb.grow();
           const q = qb.n++;
-          const id = fId[k], mask = fMask[k];
+          const id = fId[k], mask = qmask;
           const A = origin[a] + i + (s > 0 ? 1 : 0);
           let b0 = 0, b2 = 0;
           for (let c4 = 0; c4 < 4; c4++) {

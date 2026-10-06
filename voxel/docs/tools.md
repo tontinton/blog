@@ -29,6 +29,11 @@ A typical shot takes 4–10 s; 750k voxels ~15 s.
 Shot mode (`?shot`) hides all UI, disables damping/auto-rotate, freezes time at `t=0` (or `--t`), and the
 canvas is captured directly, so images are deterministic.
 
+## Unit tests (no browser, ~0.5 s)
+```sh
+node test.mjs                     # grid/shapes/palette layout/mesher invariants (winding, AO, merge, bakes)/vox
+```
+
 ## Smoke test (run after changing the lib)
 ```sh
 node check.mjs                    # every piece + every lab scene at 480×360 → out/check/*.png + _sheet.png
@@ -69,6 +74,19 @@ Node can mesh too (no WebGL needed) for quick profiling:
 import { VoxelGrid, Palette, buildMesh } from '/abs/path/static/voxel/lib/index.js';
 const r = buildMesh(grid, palette, { bake: { ao: true, light: true } }); console.log(r.stats);
 ```
+
+## Checking the real site build
+Zola copies `static/` verbatim, so pieces need no build step. To verify the whole blog still builds in a
+cloud container (no zola, theme submodule uses SSH):
+```sh
+S=$(mktemp -d); cd $S
+curl -sSL https://github.com/getzola/zola/releases/download/v0.22.1/zola-v0.22.1-x86_64-unknown-linux-gnu.tar.gz | tar xz
+git clone -q https://github.com/tontinton/apollo.git apollo
+git -C apollo checkout -q $(git -C /path/to/blog ls-files -s themes/apollo | cut -d' ' -f2)
+cp -r /path/to/blog site && rm -rf site/themes/apollo && cp -r apollo site/themes/apollo
+cd site && ../zola build && ls public/voxel
+```
+Only `static/voxel/**` is published; `voxel/` (docs, tools, lab) and `.claude/` are not.
 
 ## Updating three.js / adding addons
 `voxel/tools/vendor/three-entry.js` lists what's bundled. Add an addon export there, then
