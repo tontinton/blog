@@ -73,7 +73,8 @@ stage.start();
    flood-filled colored light from `light` materials) and returns a `THREE.Group` you can animate.
 4. **Look** — one plain object describes the whole mood: background, sun, sky ambient, AO/bevel
    strengths, bloom, DOF/tilt-shift, fog, tone mapping, grading, vignette, grain, ground shadow/reflection.
-   Start from a preset (`studio daylight pastel golden dreamy neon cozy clay winter`) and override fields.
+   Start from a preset (`studio daylight pastel golden dreamy neon cozy night rainy spooky desert winter toon clay`)
+   and override fields.
    Live-tweak with `?debug`, then "copy look JSON" into the piece.
 5. **Extras** — GPU particles (`stage.particles({ preset: 'snow' })`), real point lights (`stage.light`),
    custom GLSL hooks per model, instancing, voxel picking, `.vox` import, `stage.onUpdate((t, dt) => …)`.

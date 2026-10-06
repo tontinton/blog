@@ -20,7 +20,7 @@ const CSS = `
 .vx-hint.gone { opacity: 0; }
 .vx-loader { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; background: var(--vx-bg); color: var(--vx-fg);
   transition: opacity .9s cubic-bezier(.4,0,.2,1), visibility 0s .9s; font: 500 12px/1.4 ui-sans-serif, system-ui, sans-serif; letter-spacing: .14em; text-transform: uppercase; }
-.vx-loader.done { opacity: 0; visibility: hidden; }
+.vx-loader.done { opacity: 0; visibility: hidden; pointer-events: none; }
 .vx-loader .vx-l { display: grid; justify-items: center; gap: 14px; }
 .vx-loader h2 { margin: 0; font: 600 clamp(22px, 4vw, 40px)/1.1 ui-serif, Georgia, serif; letter-spacing: .02em; text-transform: none; }
 .vx-bar { width: 160px; height: 2px; background: color-mix(in srgb, var(--vx-fg) 18%, transparent); overflow: hidden; }
@@ -44,11 +44,11 @@ export function createUI(stage, o = {}) {
 
   const theme = () => {
     const bg = stage.look.background;
-    const c = (bg.colors ?? [bg.color])[0];
+    const c = (bg.color ? [bg.color] : bg.colors)[0];
     const dark = o.theme === 'dark' || (o.theme !== 'light' && luminance(c) < 0.35);
     const set = (el) => {
       el.style.setProperty('--vx-fg', dark ? '#f4efe6' : '#1d1a16');
-      const cols = (bg.colors ?? [bg.color]).map((x) => `rgb(${rgb(x).map((v) => Math.round(v * 255)).join(',')})`);
+      const cols = (bg.color ? [bg.color] : bg.colors).map((x) => `rgb(${rgb(x).map((v) => Math.round(v * 255)).join(',')})`);
       el.style.setProperty('--vx-bg', cols.length > 1 ? (bg.type === 'radial' ? `radial-gradient(circle at 50% 50%, ${cols.join(',')})` : `linear-gradient(${180 + (bg.angle ?? 0)}deg, ${cols.join(',')})`) : cols[0]);
     };
     set(root);

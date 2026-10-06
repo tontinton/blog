@@ -17,6 +17,7 @@ export const DEFAULT_LOOK = {
     power: 1, mid: 0.5,      // gradient curve, position of the middle color
     noise: 0.006,            // dithering noise to avoid banding
     stars: 0,                // twinkling stars: brightness (0.6–1.2), or { amount, density: 0.05, size: 1, horizon: 0.25 }
+    disc: null,              // sun/moon in the sky: { at: [0.8, 0.8] (screen), radius: 0.05 (of height), color, glow: 0.6 }
   },
   sun: {
     color: '#fff3e2', intensity: 2.4,
@@ -113,13 +114,13 @@ export const LOOKS = {
   /** low warm sun, long shadows. */
   golden: {
     background: { type: 'linear', colors: ['#f6c58a', '#e39a6a', '#8d5a6e'], mid: 0.55 },
-    sun: { color: '#ffb46b', intensity: 3.2, azimuth: 70, elevation: 18, softness: 2.2 },
+    sun: { color: '#ffb46b', intensity: 3.2, azimuth: 70, elevation: 24, softness: 2.2 },
     fill: { color: '#7d8cff', intensity: 0.35, azimuth: 250, elevation: 30 },
     sky: { top: '#7f9be0', horizon: '#ffcf9a', bottom: '#6a4a3a', intensity: 0.75 },
     bloom: { strength: 0.4, threshold: 1.4 },
     grade: { contrast: 1.08, saturation: 1.12, temperature: 0.25, gamma: [1, 0.98, 0.95] },
     vignette: { amount: 0.25 },
-    ground: { opacity: 0.4, color: '#3a1808' },
+    ground: { opacity: 0.32, color: '#3a1808' },
   },
 
   /** dreamy pink haze (floating island): soft light, glow, gentle fog. */
@@ -176,7 +177,7 @@ export const LOOKS = {
 
   /** moonlit night (not neon): deep blue sky with stars, cool moonlight, warm windows. */
   night: {
-    background: { type: 'linear', colors: ['#0a1030', '#1a2a5a', '#2a3a6a'], mid: 0.6, stars: 0.9 },
+    background: { type: 'linear', colors: ['#0a1030', '#1a2a5a', '#2a3a6a'], mid: 0.6, stars: 0.9, disc: { at: [0.82, 0.82], radius: 0.045, color: '#f4f0dc', glow: 0.5 } },
     sun: { color: '#a9b8ff', intensity: 0.9, azimuth: 220, elevation: 40, softness: 2 },
     fill: { color: '#ffb070', intensity: 0.15, azimuth: 40, elevation: 20 },
     sky: { top: '#2a3a7a', horizon: '#3a4a7a', bottom: '#10142a', intensity: 0.5, sunGlow: 0.2 },

@@ -12,6 +12,8 @@
 //     emissive: 'emis += vec3(1, .2, .1) * uPulse * mc.x;',            // mc = material custom vec4
 //     vertex: 'transformed.y += sin(uTime + transformed.x) * 0.1 * mc.y;',
 //     fragment: 'diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1), 0.1);', // end of color setup
+//     light: 'reflectedLight.directDiffuse = ...;',   // after all lighting + AO (cel shading, rim light…)
+//     output: 'gl_FragColor.rgb *= 1.0;',              // final linear HDR color before post
 //   }})
 //
 // GLSL available in hooks: cell (vec3 voxel coords), nObj (object normal), vObj (object pos), mid
@@ -224,6 +226,7 @@ const FRAG_AO = /* glsl */ `
   reflectedLight.indirectDiffuse += vVLight * 4.0 * uLook.y * diffuseColor.rgb * mix(1.0, vao, 0.6);
   #endif
 }
+/*VOXEL_LIGHT_HOOK*/
 `;
 
 /** Default values for the shared voxel uniforms (a Stage owns one set; looks write into it). */
@@ -242,7 +245,7 @@ export function createVoxelUniforms(palette) {
 
 function hookKey(hooks) {
   if (!hooks) return 0;
-  const txt = ['vertexPars', 'fragmentPars', 'vertex', 'color', 'emissive', 'fragment'].map((k) => hooks[k] ?? '').join('|') + Object.keys(hooks.uniforms ?? {}).join(',');
+  const txt = ['vertexPars', 'fragmentPars', 'vertex', 'color', 'emissive', 'fragment', 'light', 'output'].map((k) => hooks[k] ?? '').join('|') + Object.keys(hooks.uniforms ?? {}).join(',');
   return hashString(txt);
 }
 
@@ -254,7 +257,9 @@ function applyHooks(shader, hooks = {}) {
   shader.fragmentShader = shader.fragmentShader
     .replace('/*VOXEL_COLOR_HOOK*/', hooks.color ?? '')
     .replace('/*VOXEL_EMISSIVE_HOOK*/', hooks.emissive ?? '')
-    .replace('/*VOXEL_FRAGMENT_HOOK*/', hooks.fragment ?? '');
+    .replace('/*VOXEL_FRAGMENT_HOOK*/', hooks.fragment ?? '')
+    .replace('/*VOXEL_LIGHT_HOOK*/', hooks.light ?? '')
+    .replace('/*VOXEL_OUTPUT_HOOK*/', hooks.output ?? '');
 }
 
 const VERT_MAIN_TAIL = /* glsl */ `
@@ -307,7 +312,8 @@ export function createVoxelMaterial(opts) {
       .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = m1.y * metalness;')
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${FRAG_BEVEL}`)
       .replace('#include <emissivemap_fragment>', FRAG_EMISSIVE)
-      .replace('#include <aomap_fragment>', FRAG_AO);
+      .replace('#include <aomap_fragment>', FRAG_AO)
+      .replace('#include <opaque_fragment>', '#include <opaque_fragment>\n/*VOXEL_OUTPUT_HOOK*/');
     if (transparent) {
       // per-material clarity: opacity 0 → fully refractive, 1 → solid color
       shader.fragmentShader = shader.fragmentShader

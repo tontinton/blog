@@ -131,7 +131,9 @@ uniform vec4 uVig; // amount, softness, roundness, -
 uniform vec3 uVigColor;
 uniform vec4 uFx; // grain, chromatic aberration, dither, grain size
 uniform vec4 uStars; // density, brightness, size (px), horizon fade
-uniform vec4 uOutline; // amount, -, width (px), threshold
+uniform vec4 uDisc; // x, y (screen 0..1), radius (fraction of height), glow
+uniform vec3 uDiscColor;
+uniform vec4 uOutline; // amount, model radius (ortho depth scale), width (px), threshold (depth step / radius or / depth)
 uniform vec3 uOutlineColor;
 ${DEPTH_FN}
 varying vec2 vUv;
@@ -209,6 +211,11 @@ void main() {
       bg += vec3(0.9, 0.93, 1.0) * smoothstep(0.6 + mag * uStars.z, 0.0, sd) * uStars.y * tw * (0.25 + mag) * smoothstep(0.0, uStars.w, uv.y);
     }
   }
+  if (uDisc.z > 0.0) {
+    float dd = length((uv - uDisc.xy) * vec2(uRes.x / uRes.y, 1.0)) / uDisc.z;
+    bg = mix(bg, uDiscColor, smoothstep(1.0, 0.92, dd));
+    bg += uDiscColor * uDisc.w * exp(-max(dd - 1.0, 0.0) * 2.5) * 0.35;
+  }
   if (uBgB.z > 0.0) bg += (h12(uv * uRes) - 0.5) * uBgB.z;
   vec3 bgl = oetf(tonemap(bloom * uExposure));
   bg = 1.0 - (1.0 - bg) * (1.0 - bgl);
@@ -220,16 +227,15 @@ void main() {
     geo = mix(geo, uFog.w > 0.5 ? uFogColor : bg, f);
   }
   vec3 col = mix(bg, geo, a);
-  // ink outline from depth discontinuities (silhouettes + creases between objects)
+  // ink outline: second difference of linear depth (zero on planes, large at steps/creases/silhouettes)
   if (uOutline.x > 0.0) {
     vec2 px = uOutline.z / uRes;
     float dc = linDepth(min(texture2D(tDepth, uv).r, 0.9999999));
-    float e = 0.0;
-    for (int i = 0; i < 4; i++) {
-      vec2 o = i == 0 ? vec2(px.x, 0.0) : i == 1 ? vec2(-px.x, 0.0) : i == 2 ? vec2(0.0, px.y) : vec2(0.0, -px.y);
-      float dn = linDepth(min(texture2D(tDepth, uv + o).r, 0.9999999));
-      e = max(e, (dn - dc) / max(dc, 1e-3));
-    }
+    float dl = linDepth(min(texture2D(tDepth, uv - vec2(px.x, 0.0)).r, 0.9999999));
+    float dr = linDepth(min(texture2D(tDepth, uv + vec2(px.x, 0.0)).r, 0.9999999));
+    float dd = linDepth(min(texture2D(tDepth, uv - vec2(0.0, px.y)).r, 0.9999999));
+    float du = linDepth(min(texture2D(tDepth, uv + vec2(0.0, px.y)).r, 0.9999999));
+    float e = max(abs(dl + dr - 2.0 * dc), abs(dd + du - 2.0 * dc)) / max(uOrtho > 0.5 ? uOutline.y : dc, 1e-3);
     float edge = smoothstep(uOutline.w, uOutline.w * 2.0, e) * step(0.001, a);
     col = mix(col, uOutlineColor, edge * uOutline.x);
   }
@@ -278,7 +284,7 @@ export class Post {
       uLift: { value: new THREE.Vector3() }, uGamma: { value: new THREE.Vector3(1, 1, 1) }, uGain: { value: new THREE.Vector3(1, 1, 1) },
       uVig: { value: new THREE.Vector4() }, uVigColor: { value: new THREE.Color() },
       uFx: { value: new THREE.Vector4(0, 0, 1, 1) },
-      uStars: { value: new THREE.Vector4() }, uOutline: { value: new THREE.Vector4() }, uOutlineColor: { value: new THREE.Color() },
+      uStars: { value: new THREE.Vector4() }, uDisc: { value: new THREE.Vector4() }, uDiscColor: { value: new THREE.Color() }, uOutline: { value: new THREE.Vector4() }, uOutlineColor: { value: new THREE.Color() },
       ...cam,
     };
     this.mComp = fsMaterial(COMPOSITE, this.u);
@@ -323,7 +329,7 @@ export class Post {
     const type = { solid: 0, linear: 1, gradient: 1, radial: 2 }[bg.type] ?? 0;
     u.uBgA.value.set(type, type === 1 ? ((bg.angle ?? 0) * Math.PI) / 180 : bg.center?.[0] ?? 0.5, bg.center?.[1] ?? 0.5, bg.radius ?? 0.75);
     u.uBgB.value.set(bg.power ?? 1, bg.mid ?? 0.5, bg.noise ?? 0.006, 0);
-    const cols = bg.colors ?? [bg.color];
+    const cols = bg.color ? [bg.color] : bg.colors; // a singular `color` always wins (solid)
     const c0 = cols[0], c1 = cols[cols.length - 1], c2 = cols.length > 2 ? cols[1] : null;
     setDisplay(u.uBg0.value, c0); setDisplay(u.uBg1.value, c1); setDisplay(u.uBg2.value, c2 ?? mixHex(c0, c1));
     if (!c2) u.uBgB.value.y = 0.5;
@@ -341,14 +347,18 @@ export class Post {
     if (L.fog.color) setDisplay(u.uFogColor.value, L.fog.color);
     const st = bg.stars ?? 0, so = typeof st === 'object' ? st : { amount: st };
     u.uStars.value.set(so.amount ? (so.density ?? 0.05) : 0, so.amount ?? 0, so.size ?? 1, so.horizon ?? 0.25);
+    const dc = bg.disc;
+    u.uDisc.value.set(dc?.at?.[0] ?? 0.8, dc?.at?.[1] ?? 0.8, dc ? dc.radius ?? 0.05 : 0, dc?.glow ?? 0.6);
+    setDisplay(u.uDiscColor.value, dc?.color ?? '#fff6e0');
     const ol = L.outline ?? {};
-    u.uOutline.value.set(ol.amount ?? 0, 0, ol.width ?? 1, ol.threshold ?? 0.015);
+    u.uOutline.value.set(ol.amount ?? 0, this.u.uOutline.value.y || 10, ol.width ?? 1, ol.threshold ?? 0.015);
     setDisplay(u.uOutlineColor.value, ol.color ?? '#1a1410');
     this.look = L;
   }
 
   /** Render scene through the pipeline to the screen (or `target`). */
-  render(scene, camera, { time = 0, fog = null, dof = null } = {}) {
+  render(scene, camera, { time = 0, fog = null, dof = null, radius = 10 } = {}) {
+    this.u.uOutline.value.y = radius;
     const r = this.renderer, L = this.look;
     const prevClear = r.getClearColor(new THREE.Color()), prevAlpha = r.getClearAlpha();
     r.setClearColor(0x000000, 0);

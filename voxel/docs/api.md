@@ -32,6 +32,8 @@ const g = new VoxelGrid(palette)   // palette optional, but needed to use names
 | `count()`, `clear()`, `clone()` | |
 | `stamp(src, x, y, z, { rot, flipX, flipZ, mode, remap, center })` | copy another grid; `rot` = quarter turns about Y; palettes merge by material name; `center: true` = `(x,y,z)` is where src's bottom-center lands |
 | `scaled(k)`, `rotated(q)`, `mirrored('x'\|'z')` → new grid | |
+| `symmetrize(axis = 'x', c = 0, keep = 'neg')` | mirror one half onto the other (model half a character); `c = -0.5` for even widths |
+| `mat(m)` → id | resolve a name/id (what every writer uses) |
 | `recenter(to = [0,0,0])` | moves voxels so the bottom-center sits at `to` |
 
 **Modes** (any writer's `opts.mode`): `'replace'` (default) · `'keep'` (only into empty cells) ·
@@ -163,8 +165,11 @@ shadow map when sky/sun change, too heavy per frame. Animating objects: transfor
 
 **GLSL hooks** (`stage.add(g, { hooks })`, see `material.js` header): `uniforms`, `vertexPars`,
 `fragmentPars`, `vertex` (edit `transformed`, object space), `color` (edit `col` per voxel), `emissive`
-(add to `emis`), `fragment` (edit `diffuseColor`). In scope: `cell` (vec3 voxel coords), `nObj`, `vObj`,
-`mid` (material id), `m0..m3`, `mc` (material `custom`), `h` (per-voxel hash 0..1), `uTime`.
+(add to `emis`), `fragment` (edit `diffuseColor`), `light` (after lighting + AO: edit
+`reflectedLight.directDiffuse/indirectDiffuse/directSpecular/indirectSpecular`; `normal`,
+`geometryViewDir` available — cel shading, rim light), `output` (final linear HDR `gl_FragColor`).
+In scope: `cell` (vec3 voxel coords), `nObj`, `vObj`, `mid` (material id), `m0..m3`, `mc` (material
+`custom`), `h` (per-voxel hash 0..1), `uTime`. Example: `voxel/lab/cel.js` (cel shading + rim).
 
 ```js
 stage.add(g, { hooks: {

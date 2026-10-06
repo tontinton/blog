@@ -38,7 +38,8 @@ Combine: `['golden', 'clay']`, `['neon', { fog: { amount: 0.3 } }]`.
 `type: 'solid' | 'linear' | 'radial'`, `colors: [a, b]` or `[a, mid, b]` (linear: top→bottom; radial:
 center→edge), `angle` (linear, deg), `center: [x, y]` + `radius` (radial, screen units), `power` (curve),
 `mid` (position of the middle color), `noise` (dither, keep ~0.006), `stars` (brightness 0.6–1.2, or
-`{ amount, density: 0.05, size: 1, horizon: 0.25 }` — twinkling, fading toward the bottom). Make the page `<body>` background
+`{ amount, density: 0.05, size: 1, horizon: 0.25 }` — twinkling, fading toward the bottom), `disc` (a sun/moon:
+`{ at: [0.82, 0.82] (screen), radius: 0.045 (of screen height), color, glow }`). Make the page `<body>` background
 match `colors.at(-1)` so there's no flash (new.mjs does).
 
 **sun** — the shadow-casting directional light. `color`, `intensity` (daylight ~2.5–3, night ~0.5–1.5),

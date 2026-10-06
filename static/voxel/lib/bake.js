@@ -102,7 +102,7 @@ export class Baker {
     const lx = x - L.min[0], ly = y - L.min[1], lz = z - L.min[2];
     if (lx < 0 || ly < 0 || lz < 0 || lx >= L.size[0] || ly >= L.size[1] || lz >= L.size[2]) { out[o] = out[o + 1] = out[o + 2] = 0; return; }
     const i = (lx + lz * L.size[0] + ly * L.size[0] * L.size[2]) * 3;
-    out[o] = L.rgb[i]; out[o + 1] = L.rgb[i + 1]; out[o + 2] = L.rgb[i + 2];
+    out[o] = L.rgb[i] / 4096; out[o + 1] = L.rgb[i + 1] / 4096; out[o + 2] = L.rgb[i + 2] / 4096;
   }
 }
 
@@ -134,11 +134,15 @@ function bakeLight(grid, palette, cls, opts) {
   for (let k = 0; k < 3; k++) { min[k] = Math.max(min[k], b.min[k] - 1); max[k] = Math.min(max[k], b.max[k] + 1); }
   const size = [max[0] - min[0] + 1, max[1] - min[1] + 1, max[2] - min[2] + 1];
   const N = size[0] * size[1] * size[2];
+  if (N > (opts.maxCells ?? 40e6)) {
+    console.warn(`voxel: light bake skipped, lit volume is ${(N / 1e6).toFixed(1)}M cells (> bake.light.maxCells). Split the scene into models or use fewer/clustered lights.`);
+    return null;
+  }
   const SX = 1, SZ = size[0], SY = size[0] * size[2];
   const open = new Uint8Array(N);
   for (let y = 0; y < size[1]; y++) for (let z = 0; z < size[2]; z++) for (let x = 0; x < size[0]; x++)
     open[x + z * SZ + y * SY] = cls[grid.get(x + min[0], y + min[1], z + min[2])] === 1 ? 0 : 1;
-  const rgb = new Float32Array(N * 3);
+  const rgb = new Uint16Array(N * 3); // light * 4096 (max 16)
   const level = new Uint16Array(N);
   // 18-neighborhood: 6 faces (cost 16) + 12 edges (cost 23 ≈ 16√2), distances in 1/16 voxel
   const nb = [];
@@ -187,7 +191,9 @@ function bakeLight(grid, palette, cls, opts) {
       const l = level[i];
       if (!l) continue;
       const f = l / R16, w = I * (fo === 'linear' ? f : fo === 'quadratic' ? f * f : f * f * (3 - 2 * f));
-      rgb[i * 3] += c[0] * w; rgb[i * 3 + 1] += c[1] * w; rgb[i * 3 + 2] += c[2] * w;
+      rgb[i * 3] = Math.min(65535, rgb[i * 3] + c[0] * w * 4096);
+      rgb[i * 3 + 1] = Math.min(65535, rgb[i * 3 + 1] + c[1] * w * 4096);
+      rgb[i * 3 + 2] = Math.min(65535, rgb[i * 3 + 2] + c[2] * w * 4096);
     }
   }
   return { min, size, rgb, groups: groups.size };
