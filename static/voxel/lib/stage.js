@@ -598,7 +598,7 @@ export class Stage {
   }
 
   stats() {
-    const info = this.renderer.info;
+    const info = { render: this.post.sceneInfo ?? this.renderer.info.render };
     return {
       models: this.models.length,
       voxels: this.models.reduce((a, m) => a + m.stats.voxels, 0),
@@ -607,7 +607,7 @@ export class Stage {
       bakeMs: this.models.reduce((a, m) => a + (m.stats.bakeMs ?? 0), 0),
       lightGroups: this.models.reduce((a, m) => a + (m.stats.lights ?? 0), 0),
       particles: this.particleSystems.reduce((a, p) => a + p.count, 0),
-      drawCalls: info.render.calls, triangles: info.render.triangles,
+      drawCalls: info.render.calls, triangles: info.render.triangles, // main scene pass (shadows/reflection excluded)
       bounds: { min: this.bounds.min.toArray().map(Math.round), max: this.bounds.max.toArray().map(Math.round) },
       size: [this.w, this.h, this.dpr],
     };
