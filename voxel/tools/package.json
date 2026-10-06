@@ -6,7 +6,9 @@
   "scripts": {
     "vendor": "node build-vendor.mjs",
     "shot": "node shot.mjs",
-    "serve": "node serve.mjs"
+    "serve": "node serve.mjs",
+    "new": "node new.mjs",
+    "check": "node check.mjs"
   },
   "devDependencies": {
     "esbuild": "0.25.12",

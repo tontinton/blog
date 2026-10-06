@@ -313,3 +313,31 @@ export function fireplace(g, p, side = '+z', o = {}) {
   for (let i = 0; i < w - 2; i++) for (let j = 0; j < Math.max(1, h - 2); j++) g.set(alongX ? fx + i : fx, p[1] + j, alongX ? fz : fz + i, j === 0 ? g.mat(o.fire ?? 'fire') : 0);
   return g;
 }
+
+/**
+ * Fill a box with big bricks/stones and mortar lines (castle walls, chimneys, paving).
+ * The long horizontal axis of the box is the brick direction (or opts.axis 'x'|'z'; 'y' lays paving on the floor).
+ * opts: size [w, h] in voxels (3, 2), mortar (id | null for none, 'stoneDark'), stones (ids picked per brick),
+ *       stagger (row offset, w/2), mode, seed
+ */
+export function bricks(g, a, b, o = {}) {
+  const lo = [0, 1, 2].map((i) => Math.min(a[i], b[i])), hi = [0, 1, 2].map((i) => Math.max(a[i], b[i]));
+  const axis = o.axis ?? (hi[0] - lo[0] >= hi[2] - lo[2] ? 'x' : 'z');
+  const [w, h] = o.size ?? [3, 2];
+  const stones = o.stones ?? ['stoneDark', 'stone', 'stoneLight'];
+  const mortar = o.mortar === undefined ? 'stoneDark' : o.mortar;
+  const stagger = o.stagger ?? Math.floor(w / 2);
+  const seed = o.seed ?? 1;
+  for (let y = lo[1]; y <= hi[1]; y++) for (let z = lo[2]; z <= hi[2]; z++) for (let x = lo[0]; x <= hi[0]; x++) {
+    // (u, v) = position along the brick axis and across rows
+    const u = axis === 'x' ? x - lo[0] : axis === 'z' ? z - lo[2] : x - lo[0];
+    const v = axis === 'y' ? z - lo[2] : y - lo[1];
+    const row = Math.floor(v / h);
+    const uu = u + (row % 2 ? stagger : 0);
+    const col = Math.floor(uu / w);
+    const isM = mortar && (v % h === h - 1 || uu % w === w - 1);
+    const id = isM ? mortar : stones[Math.floor(hash3(col, row, axis === 'x' ? z : x, seed) * stones.length)];
+    g.put(x, y, z, id, o.mode);
+  }
+  return g;
+}

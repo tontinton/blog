@@ -56,9 +56,10 @@ const browser = await chromium.launch({
   args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl'],
 });
 const page = await browser.newPage({ viewport: { width: W, height: H }, deviceScaleFactor: 1 });
-let errors = 0;
+let errors = 0, failNow;
+const failed = new Promise((_, rej) => { failNow = rej; });
 page.on('console', (m) => console.log(`[${m.type()}]`, m.text()));
-page.on('pageerror', (e) => { errors++; console.log('[pageerror]', e.stack || e.message); });
+page.on('pageerror', (e) => { errors++; console.log('[pageerror]', e.stack || e.message); failNow(new Error('page error (see above)')); });
 
 const q = new URLSearchParams(opt('query', ''));
 if (!flag('ui')) q.set('shot', '1');
@@ -67,10 +68,11 @@ const url = `http://127.0.0.1:${port}${path}${path.includes('?') ? '&' : '?'}${q
 const t0 = Date.now();
 try {
   await page.goto(url, { waitUntil: 'load', timeout });
-  await page.waitForFunction(() => window.VOXEL?.ready || window.VOXEL?.error, null, { timeout, polling: 250 });
+  await Promise.race([page.waitForFunction(() => window.VOXEL?.ready || window.VOXEL?.error, null, { timeout, polling: 250 }), failed]);
   const err = await page.evaluate(() => window.VOXEL.error && String(window.VOXEL.error));
   if (err) throw new Error('piece failed: ' + err);
   mkdirSync(dirname(out), { recursive: true });
+  if (flag('ui')) await page.waitForFunction(() => { const l = document.querySelector('.vx-loader'); return !l || getComputedStyle(l).opacity === '0'; }, null, { timeout, polling: 200 });
   if (opt('wait')) await page.waitForTimeout(Number(opt('wait')));
   const jpeg = /\.jpe?g$/i.test(out);
   if (flag('page') || flag('ui')) {

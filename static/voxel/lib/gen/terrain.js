@@ -111,7 +111,7 @@ export function island(g, c, o = {}) {
   return g;
 }
 
-/** Carve a basin into the surface and fill it with water. c = [x, z]. opts: radius, depth, water, shore ('sand'), bed ('dirt'), level, seed */
+/** Carve a basin into the surface and fill it with water. c = [x, z]. opts: radius, depth, water, shore ('sand' | false), bed ('sand'), level, seed */
 export function pond(g, c, o = {}) {
   const N = noise(o.seed ?? 5);
   const R = o.radius ?? 5, depth = o.depth ?? 2;
@@ -128,7 +128,7 @@ export function pond(g, c, o = {}) {
       const carve = Math.max(1, Math.round(depth * (1 - d * d)) + (top - level) + 1);
       for (let i = 0; i < carve; i++) g.set(x, top - i, z, 0);
       const floor = top - carve;
-      if (o.bed !== false) g.set(x, floor, z, g.mat(o.bed ?? 'dirt'));
+      if (o.bed !== false) g.set(x, floor, z, g.mat(o.bed ?? 'sand'));
       for (let y = floor + 1; y <= level; y++) g.set(x, y, z, g.mat(o.water ?? 'water'));
     } else if (d < 1.35 && o.shore !== false && top >= level - 1) {
       g.set(x, top, z, g.mat(o.shore ?? 'sand'));

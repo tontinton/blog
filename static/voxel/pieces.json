@@ -1,0 +1,13 @@
+[
+  {
+    "slug": "cottage",
+    "title": "Cottage",
+    "description": "A tiny hillside cottage at golden hour.",
+    "date": "2026-10-06",
+    "preview": "/voxel/cottage/preview.jpg",
+    "tags": [
+      "demo",
+      "nature"
+    ]
+  }
+]

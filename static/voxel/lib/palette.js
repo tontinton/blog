@@ -20,7 +20,8 @@
 //   roughness   0.85        metalness 0
 //   emissive    glow intensity (0)   emissiveColor (defaults to color)
 //   flicker     0..1 glow flicker (fire, candles)   flickerSpeed (1)
-//   light       true | radius | { color, intensity=1, radius=6 }  bake colored light onto nearby voxels
+//   light       true | radius | { color, intensity=1, radius=6, falloff='smooth'|'linear'|'quadratic' }
+//               bake colored light (flood-filled through air, blocked by solids) onto nearby voxels
 //   sway        wind sway amount (leaves ~0.5, grass ~1)
 //   bevel       multiplier on the look's bevel (1). 0 = razor sharp edges for this material
 //   grid        0..1 dark lines on every voxel edge, even inside merged faces (tiles, bricks)
@@ -152,6 +153,7 @@ function lightDef(l, color, emissive) {
     color: srgbToLinear(l.color ?? color),
     intensity: l.intensity ?? 1,
     radius: l.radius ?? 6,
+    falloff: l.falloff ?? 'smooth',
     key: hex(l.color ?? color),
   };
 }

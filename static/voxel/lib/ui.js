@@ -1,6 +1,6 @@
 // Minimal page chrome shared by all pieces: loader, title card, back link, interaction hint, and the
 // ?debug panel (lil-gui) for live look tweaking. Everything is optional via `ui` options:
-//   ui: { title, subtitle, credit, back: '/voxel/' | false, hint: true | 'custom text' | false,
+//   ui: { title, subtitle, credit, back: '/' | url | false, backLabel: '← tontinton', hint: true | 'custom text' | false,
 //         loader: true | false, theme: 'auto' | 'light' | 'dark', css: 'extra css' }
 // In ?shot mode nothing is shown.
 import { luminance, rgb } from './color.js';
@@ -67,7 +67,8 @@ export function createUI(stage, o = {}) {
   }
   if (o.back !== false) {
     const a = document.createElement('a');
-    a.className = 'vx-back'; a.href = o.back ?? '/voxel/'; a.textContent = '← voxel';
+    // TODO(gallery): once /voxel/ exists, default to { back: '/voxel/', backLabel: '← voxel' }
+    a.className = 'vx-back'; a.href = o.back ?? '/'; a.textContent = o.backLabel ?? '← tontinton';
     root.appendChild(a);
   }
   if (o.title) {
@@ -87,6 +88,9 @@ export function createUI(stage, o = {}) {
     root.appendChild(hint);
   }
   theme();
+  const cv = stage.renderer.domElement;
+  cv.setAttribute('role', 'img');
+  cv.setAttribute('aria-label', [o.title, o.subtitle].filter(Boolean).join(' — ') || 'Voxel art');
 
   let gui = null, statsEl = null, acc = 0, frames = 0;
   if (stage.debug) {
@@ -152,6 +156,7 @@ function buildGui(GUI, stage) {
   f('vignette / grain', L.vignette, [['amount', 0, 1, 0.01], ['softness', 0, 1.5, 0.01], ['color']]);
   f('ground', L.ground, [['opacity', 0, 1, 0.01], ['color'], ['contact', 0, 1, 0.01]]);
   f('wind', L.wind, [['strength', 0, 4, 0.01], ['speed', 0, 4, 0.01]]);
+  f('water', L.water, [['glow', 0, 2, 0.01], ['strength', 0, 4, 0.01], ['speed', 0, 4, 0.01], ['scale', 0.1, 4, 0.01]]);
   const tools = {
     'copy look JSON': () => {
       const txt = JSON.stringify(diff(merge({}, DEFAULT_LOOK), stage.look), null, 2);
