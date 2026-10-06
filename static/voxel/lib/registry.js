@@ -88,3 +88,10 @@ defineShading('height-tint', {
   fragmentPars: 'uniform vec3 uTintLow; uniform vec2 uTintRange;',
   color: 'col *= mix(uTintLow, vec3(1.0), clamp((cell.y - uTintRange.x) / max(uTintRange.y - uTintRange.x, 1.0), 0.0, 1.0));',
 }, { summary: 'cool/dark tint toward the bottom (depth in tall scenes)' });
+
+defineShading('hatch', {
+  uniforms: { uHatch: { value: 0.6 } }, fragmentPars: 'uniform float uHatch;',
+  output: `{ float hl = dot(gl_FragColor.rgb, vec3(0.333));
+    float hs = step(fract((gl_FragCoord.x + gl_FragCoord.y) * 0.18), 1.0 - hl) * uHatch;
+    gl_FragColor.rgb *= 1.0 - hs * 0.5; }`,
+}, { summary: 'diagonal pencil hatching in the shadows (uniform uHatch)' });

@@ -170,6 +170,31 @@ export class VoxelGrid {
     return -Infinity;
   }
 
+  /**
+   * Top surface of a rectangle in one pass over its chunks (fast for big worlds):
+   * { x0, z0, W, D, y: Int32Array (highest solid y, or -2^31 if empty), id: Uint16Array } indexed [x-x0 + (z-z0)*W].
+   */
+  tops(x0, z0, x1, z1) {
+    x0 = Math.floor(x0); z0 = Math.floor(z0); x1 = Math.floor(x1); z1 = Math.floor(z1);
+    const W = x1 - x0 + 1, D = z1 - z0 + 1;
+    const y = new Int32Array(W * D).fill(-2147483648), id = new Uint16Array(W * D);
+    for (const c of this.chunks.values()) {
+      const bx = c.cx * CHUNK, bz = c.cz * CHUNK, by = c.cy * CHUNK;
+      if (bx > x1 || bx + M < x0 || bz > z1 || bz + M < z0) continue;
+      const d = c.data;
+      const lx0 = Math.max(0, x0 - bx), lx1 = Math.min(M, x1 - bx), lz0 = Math.max(0, z0 - bz), lz1 = Math.min(M, z1 - bz);
+      for (let lz = lz0; lz <= lz1; lz++) for (let lx = lx0; lx <= lx1; lx++) {
+        const o = (bx + lx - x0) + (bz + lz - z0) * W;
+        if (y[o] >= by + M) continue;
+        for (let ly = M; ly >= 0; ly--) {
+          const v = d[lx | (lz << CHUNK_BITS) | (ly << (2 * CHUNK_BITS))];
+          if (v) { if (by + ly > y[o]) { y[o] = by + ly; id[o] = v; } break; }
+        }
+      }
+    }
+    return { x0, z0, W, D, y, id };
+  }
+
   /** Exact bounds of solid voxels: { min: [x,y,z], max: [x,y,z] } (inclusive) or null if empty. */
   bounds() {
     if (this._b !== undefined) return this._b;

@@ -237,32 +237,104 @@ test('ascii flip mirrors ragged rows against the widest row', () => {
 });
 
 // ---- generators: every one runs, writes voxels, and is deterministic per seed -----------------------
-const GEN = {
-  oak: (g) => V.oak(g, [0, 1, 0], { seed: 3 }), blossom: (g) => V.blossom(g, [0, 1, 0], { seed: 3 }), bush: (g) => V.bush(g, [0, 1, 0], { seed: 3 }),
-  pine: (g) => V.pine(g, [0, 1, 0], { seed: 3, snow: 'snow' }), palm: (g) => V.palm(g, [0, 1, 0], { seed: 3 }), willow: (g) => V.willow(g, [0, 1, 0], { seed: 3 }),
-  branches: (g) => V.branches(g, [0, 1, 0], { seed: 3 }), rock: (g) => V.rock(g, [0, 1, 0], { seed: 3, moss: 'moss' }),
-  flower: (g) => V.flower(g, [0, 1, 0], { seed: 3 }), mushroom: (g) => V.mushroom(g, [0, 1, 0], { dots: 'petalWhite' }), reeds: (g) => V.reeds(g, [0, 1, 0], { seed: 3 }),
-  cloud: (g) => V.cloud(g, [0, 20, 0], { seed: 3 }), smoke: (g) => V.smoke(g, [0, 10, 0], { seed: 3 }), waterfall: (g) => V.waterfall(g, [0, 10, 0], 0),
-  tile: (g) => V.tile(g, [-8, -8], [8, 8], { hills: 2, corner: 2, edge: 0.5 }), terrain: (g) => V.terrain(g, [-8, -8], [8, 8], { water: 'water', waterLevel: 3 }),
-  island: (g) => V.island(g, [0, 10, 0], { radius: 8 }), pondRiver: (g) => { V.tile(g, [-10, -10], [10, 10]); V.pond(g, [0, 0], { radius: 3 }); V.river(g, [[-9, 5], [9, 6]]); V.trail(g, [[-9, -5], [9, -4]]); },
-  strata: (g) => { g.box([0, 0, 0], [5, 9, 5], 'stone'); V.strata(g, { on: ['stone'] }); },
-  coverVines: (g) => { g.box([0, 0, 0], [8, 6, 8], 'stone'); V.cover(g, { on: ['stone'], with: 'moss' }); V.vines(g, { on: ['stone'], density: 0.3 }); },
-  scatter: (g) => { V.tile(g, [-6, -6], [6, 6]); V.scatter(g, (x, y, z, R) => V.grassTuft(g, [x, y, z], { R }), { on: ['grass'], density: 0.3 }); },
-  house: (g) => V.house(g, [0, 1, 0], { chimney: true, lit: 0.5, seed: 3 }), walls: (g) => V.walls(g, [0, 1, 0], [8, 5, 6], 'brick', { openings: [{ side: '+z', w: 2, h: 3 }] }),
-  fence: (g) => V.fence(g, [[0, 1, 0], [9, 1, 0], [9, 1, 6]]), stairs: (g) => V.stairs(g, [0, 1, 0], '+x', 5, 'plank', { width: 2 }), ladder: (g) => V.ladder(g, [0, 1, 0], 5),
-  lamppost: (g) => V.lamppost(g, [0, 1, 0], { arm: '+x' }), well: (g) => V.well(g, [0, 1, 0]), truss: (g) => V.truss(g, [0, 1, 0], [0, 12, 0]),
-  facade: (g) => { g.box([0, 0, 0], [10, 12, 4], 'concrete'); V.facade(g, [0, 1, 4], [10, 11, 4], { seed: 3 }); },
-  props: (g) => { V.crate(g, [0, 1, 0]); V.barrel(g, [4, 1, 0]); V.table(g, [8, 1, 0]); V.chair(g, [12, 1, 0]); V.bed(g, [0, 1, 6]); V.bookshelf(g, [8, 1, 6]); V.fireplace(g, [14, 1, 6]); },
-  bricks: (g) => V.bricks(g, [0, 0, 0], [12, 6, 1]), person: (g) => V.person(g, [0, 1, 0], { seed: 3, pose: 'wave' }), campfire: (g) => V.campfire(g, [0, 1, 0]),
-  bench: (g) => V.bench(g, [0, 1, 0]), signpost: (g) => V.signpost(g, [0, 1, 0], { text: 'HI' }), lantern: (g) => V.lantern(g, [0, 8, 0]),
-  bridge: (g) => V.bridge(g, [0, 1, 0], [10, 1, 0], { arch: 2 }), boat: (g) => V.boat(g, [0, 0, 0], { cabin: true, mast: 5 }), car: (g) => V.car(g, [0, 1, 0]),
-};
-for (const [name, fn] of Object.entries(GEN)) test(`generator ${name}`, () => {
-  const make = () => { const Q = new Palette({ ...NATURE, ...BUILD }); const g = new VoxelGrid(Q); fn(g); return g; };
+// ---- registry: every registered generator/creature is tested from its own example -----------------------
+// (register new ones with defineGenerator / defineCreature + example and they're covered automatically)
+const GEN_MODULES = { nature: await import('../../static/voxel/lib/gen/nature.js'), terrain: await import('../../static/voxel/lib/gen/terrain.js'), build: await import('../../static/voxel/lib/gen/build.js') };
+test('every exported generator is registered with an example', () => {
+  const missing = [];
+  for (const [cat, mod] of Object.entries(GEN_MODULES)) for (const [name, fn] of Object.entries(mod)) {
+    if (typeof fn !== 'function') continue;
+    const e = V.lookup('generator', name);
+    if (!e || e.value !== fn || !e.example) missing.push(`${cat}.${name}`);
+  }
+  assert.deepEqual(missing, [], 'add defineGenerator(fn, { category, summary, example }) at the bottom of the module');
+});
+for (const e of V.list('generator')) test(`generator ${e.name} (example)`, () => {
+  assert.ok(e.example, 'no example');
+  const make = () => { const Q = new Palette({ ...NATURE, ...BUILD }); const g = new VoxelGrid(Q); e.example(g); return g; };
   const a = make(), b = make();
   assert.ok(a.count() > 0, 'wrote no voxels');
   assert.deepEqual(cells(a), cells(b), 'not deterministic');
   buildMesh(a, a.palette, { bake: { ao: true, light: true } });
+});
+for (const e of V.list('creature')) test(`creature ${e.name}`, () => {
+  const r = e.value({ seed: 3 }), r2 = e.value({ seed: 3 });
+  assert.ok(r.parts.length > 0, 'no parts');
+  assert.ok(['ground', 'water', 'air'].includes(e.habitat), 'meta.habitat');
+  assert.equal(typeof e.example, 'function');
+  r.parts.forEach((p, i) => {
+    assert.ok(p.grid.count() > 0, `part ${p.name} empty`);
+    assert.deepEqual(cells(p.grid), cells(r2.parts[i].grid), 'not deterministic');
+    assert.ok(buildMesh(p.grid, r.palette, { greedy: true }).solid, `part ${p.name} has no solid mesh`);
+    if (['leg', 'arm', 'wing', 'tail', 'head', 'fin'].includes(p.role)) assert.ok(p.pivot, `${p.role} ${p.name} needs a pivot`);
+  });
+  const feet = Math.min(...r.parts.map((p) => p.grid.bounds().min[1]));
+  if (!r.fly && !r.swim) assert.equal(feet, 0, 'rig feet should be at y = 0');
+});
+
+// ---- actors (simulated without WebGL) ------------------------------------------------------------------
+const fakeStage = (g) => {
+  const root = new V.THREE.Group(), inner = new V.THREE.Group(); root.add(inner);
+  return { models: [{ grid: g, inner, opts: {} }], root, uniforms: V.createVoxelUniforms({ texture: () => null }), bounds: new V.THREE.Box3(), look: { sun: { update: 'always' } } };
+};
+test('grid.tops matches top() per column', () => {
+  const g = new VoxelGrid(P);
+  const R = rng(4);
+  for (let i = 0; i < 300; i++) g.set(R.int(-40, 40), R.int(-40, 70), R.int(-40, 40), 'a');
+  const T = g.tops(-41, -41, 41, 41);
+  for (let x = -41; x <= 41; x += 3) for (let z = -41; z <= 41; z += 2) {
+    const want = g.top(x, z), got = T.y[x - T.x0 + (z - T.z0) * T.W];
+    assert.equal(got === -2147483648 ? -Infinity : got, want, `column ${x},${z}`);
+  }
+});
+test('heightField: tufts and high canopies are see-through, bushes block, water is separate', () => {
+  const Q = new Palette({ ...NATURE, water: { color: '#00f', kind: 'water' } });
+  const g = new VoxelGrid(Q);
+  g.box([0, 0, 0], [20, 0, 20], 'grass');
+  g.set(2, 1, 2, 'leaf');                                  // 1-voxel tuft
+  g.box([5, 1, 5], [6, 2, 6], 'leaf');                     // bush (2 tall, on the ground)
+  g.box([10, 8, 10], [12, 9, 12], 'leaf');                 // canopy high above
+  g.box([15, 0, 15], [16, 0, 16], 'water');
+  const hf = V.heightField([{ grid: g, off: [0, 0, 0] }], [[0, 0], [20, 20]], 'ground', 4);
+  assert.equal(hf.at(2.5, 2.5), 1, 'tuft');
+  assert.equal(hf.at(5.5, 5.5), 3, 'bush');
+  assert.equal(hf.at(11, 11), 1, 'under canopy');
+  assert.ok(!hf.ok(15.5, 15.5) && hf.ok(1, 1), 'water is not ground');
+  const wf = V.heightField([{ grid: g, off: [0, 0, 0] }], [[0, 0], [20, 20]], 'water');
+  assert.ok(wf.ok(15.5, 15.5) && !wf.ok(1, 1));
+});
+test('actors: wander stays walkable, path follows the path, deterministic', () => {
+  const Q = new Palette({ ...NATURE, ...BUILD });
+  const g = new VoxelGrid(Q);
+  V.tile(g, [-20, -20], [20, 20], { depth: 2 });
+  g.box([-4, 1, -4], [4, 6, 4], 'stone');                  // a block they must walk around
+  const run = () => {
+    const st = fakeStage(g);
+    const A = new V.Actors(st, { creature: 'cat', count: 4, variants: 2, seed: 2 });
+    const W = new V.Actors(st, { creature: 'walker', count: 3, behavior: 'path', path: [[-15, -15], [15, -15], [15, 15]], loop: false });
+    for (let k = 0; k < 300; k++) { A.step(1 / 30, k / 30); W.step(1 / 30, k / 30); }
+    A.pose(10); W.pose(10);
+    return { A, W };
+  };
+  const { A, W } = run(), b = run();
+  for (const ag of A.agents) {
+    assert.ok(Math.abs(ag.x) <= 21 && Math.abs(ag.z) <= 21, 'left the tile');
+    assert.ok(!(Math.abs(ag.x) < 4 && Math.abs(ag.z) < 4), `walked into the block at ${ag.x},${ag.z}`);
+    assert.ok(Math.abs(ag.y - 1) < 0.2, 'feet on the ground');
+  }
+  assert.deepEqual(A.agents.map((a) => [a.x, a.z]), b.A.agents.map((a) => [a.x, a.z]), 'not deterministic');
+  for (const ag of W.agents) assert.ok(Math.abs(ag.z + 15) < 0.01 || Math.abs(ag.x - 15) < 0.01, `walker off the path ${ag.x},${ag.z}`);
+  assert.equal(A.sets.length, 2);
+  assert.equal(A.sets[0].meshes[0].count, 2);
+});
+test('actors: follow chain trails its target', () => {
+  const g = new VoxelGrid(new Palette(NATURE)); g.box([-30, 0, -30], [30, 0, 30], 'grass');
+  const st = fakeStage(g);
+  const lead = { x: 0, z: 0 };
+  const F = new V.Actors(st, { creature: 'duck', count: 3, behavior: 'follow', target: () => [lead.x, lead.z], on: 'ground' });
+  for (let k = 0; k < 600; k++) { lead.x = Math.sin(k / 200) * 6; lead.z = k / 40; F.step(1 / 30, k / 30); } // leader ~0.8 voxels/s
+  const d0 = Math.hypot(F.agents[0].x - lead.x, F.agents[0].z - lead.z), d2 = Math.hypot(F.agents[2].x - lead.x, F.agents[2].z - lead.z);
+  assert.ok(d0 < 6 && d2 > d0, `chain order (d0 ${d0.toFixed(1)}, d2 ${d2.toFixed(1)})`);
 });
 
 console.log(`${passed} passed, ${failed} failed`);

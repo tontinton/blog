@@ -10,7 +10,11 @@ static/voxel/
   lib/               the library (published; pieces import it with ../lib/index.js)
     index.js         barrel — import everything from here
     grid.js shapes.js palette.js mesher.js bake.js material.js post.js stage.js looks.js
-    particles.js ui.js vox.js random.js color.js gen/{nature,terrain,build}.js
+    particles.js ui.js vox.js random.js color.js
+    actors.js        animated creatures (instanced rigs, behaviors, terrain following)
+    registry.js      defineGenerator/Creature/Shading/Look/Particles — everything nameable
+    world.js cluster.js pool.js worker.js   big scenes: parallel region modules, clusters, worker meshing
+    gen/{nature,terrain,build,creatures}.js generators + creatures (all registered with examples)
     vendor/          three.js r186 (single minified module) + lil-gui
   <slug>/            one folder per piece: index.html + scene.js (+ preview.jpg)
   cottage/           the demo piece — read it first, it's ~50 lines
@@ -20,7 +24,10 @@ voxel/               (repo root, NOT published)
   docs/api.md        full API reference
   docs/looks.md      the look system: every knob, presets, how to get each mood
   docs/cookbook.md   techniques + recipes for common subjects (rooms, islands, neon, characters…)
-  docs/tools.md      screenshot harness, dev server, debugging, performance
+  docs/tools.md      screenshot harness, dev server, catalog, debugging, performance
+  docs/animation.md  moving parts, creatures (cats, people, birds…), behaviors, making rigs
+  docs/big-scenes.md stage.world(): region modules, parallel subagents, 60 fps budgets
+  docs/extending.md  extend-first workflow: add generators/shadings/looks/creatures to the lib
   template/          what new.mjs copies
   lab/               unpublished test scenes (also good worked examples), served at /voxel/_lab/?scene=name
   tools/             new.mjs, shot.mjs, test.mjs (unit tests), check.mjs (render smoke test), serve.mjs, build-vendor.mjs
@@ -77,9 +84,19 @@ stage.start();
    and override fields.
    Live-tweak with `?debug`, then "copy look JSON" into the piece.
 5. **Extras** — GPU particles (`stage.particles({ preset: 'snow' })`), real point lights (`stage.light`),
-   custom GLSL hooks per model, instancing, voxel picking, `.vox` import, `stage.onUpdate((t, dt) => …)`.
+   custom GLSL hooks / named shadings per model, instancing, voxel picking, `.vox` import, `stage.onUpdate((t, dt) => …)`.
+6. **Life** — `stage.actors({ creature: 'cat', count: 3 })`: instanced creatures that walk the terrain
+   (wander, paths, follow, flocks); `stage.animate(group, { spin })` for windmills and boats. animation.md.
+7. **Big worlds** — `stage.world({ palette, assets, regions: [{ module, box }] })`: each region is a module
+   built in its own worker (one subagent each), merged, meshed as frustum-culled clusters. big-scenes.md.
+8. **Registry** — generators, creatures, shadings, looks, particle presets are registered by name with an
+   example; tests and the lab catalog (`?scene=catalog`) cover them automatically. extending.md.
 
 ## Workflow that works (for Claude sessions)
+
+- **Extend first, then art.** If the piece needs a generator/shading/creature the lib lacks, add it to the
+  lib (registered, with an example — extending.md), check it in the catalog, then build the piece.
+- **Big scene?** Plan regions + seams in a `layout.js`, then one subagent per region file (big-scenes.md).
 
 - Sketch the composition in code fast with generators and big boxes, shoot `--views 4`, *look at the
   image*, then refine. Iterate on small `--size 640x480` shots; they take ~5 s.
@@ -87,7 +104,9 @@ stage.start();
 - A/B look changes without editing files: `--query 'lookjson={"bloom":{"strength":1}}'`.
 - Use `?t=<seconds>` (shot does `t=0`) to freeze time; particle/flicker/sway states are deterministic.
 - Keep generation deterministic (`rng(seed)`, `noise(seed)`, `hash3`); never `Math.random()`.
-- Budget: < ~1.5M voxels / < ~300k quads keeps mobile happy. `stage.stats()` (printed by shot.mjs) tells you.
+- Budget: < ~1.5M voxels / < ~300k quads (≤ 500k + instancing in a world) and ≤ ~150 draw calls keeps
+  mobile happy. `stage.stats()` (printed by shot.mjs) tells you.
+- Close-ups for details: `--query 'target=x,y,z' --zoom 4`. Lab catalog to browse what exists.
 - After finishing: write `preview.jpg`, fill in `pieces.json` (title/description/tags), commit.
 - The `/voxel/` gallery page doesn't exist yet: pieces' back link goes home. When building the gallery,
   read `static/voxel/pieces.json` and flip the default in `lib/ui.js` (marked `TODO(gallery)`).
@@ -107,4 +126,8 @@ stage.start();
 - Look values are display colors (sRGB); the background is composited *after* tone mapping, so the
   background color you pick is exactly what you see.
 
-More: [docs/api.md](docs/api.md) · [docs/looks.md](docs/looks.md) · [docs/cookbook.md](docs/cookbook.md) · [docs/tools.md](docs/tools.md)
+- Actors read the terrain when created: call `stage.actors` after `stage.add` of the ground.
+
+More: [docs/api.md](docs/api.md) · [docs/looks.md](docs/looks.md) · [docs/cookbook.md](docs/cookbook.md) ·
+[docs/animation.md](docs/animation.md) · [docs/big-scenes.md](docs/big-scenes.md) · [docs/extending.md](docs/extending.md) ·
+[docs/tools.md](docs/tools.md)

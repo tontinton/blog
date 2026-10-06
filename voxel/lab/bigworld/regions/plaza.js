@@ -13,5 +13,6 @@ export default function build(g, ctx) {
     g.set(c[0] + dx, 73, c[2] + 6, 1 && g.palette.brazier);
   }
   for (const [dx, dz] of [[-40, -40], [40, -40], [-40, 40], [40, 40]]) g.box([c[0] + dx, 1, c[2] + dz], [c[0] + dx + 1, 3, c[2] + dz + 1], 'brazier');
+  ctx.emit('actors', { creature: 'bird', count: 14, behavior: 'circle', center: [c[0], 95, c[2]], radius: 45 });
   ctx.emit('particles', { preset: 'embers', count: 40, box: [[c[0] - 14, 72, c[2] - 2], [c[0] + 14, 90, c[2] + 8]] });
 }

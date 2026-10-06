@@ -7,6 +7,7 @@
 //   trail(g, [[-10, 8], [0, 2], [10, 6]], { width: 2, with: ['dirt', 'cobble'] });
 import { rng, noise, hash3, clamp } from '../random.js';
 import { spline } from '../shapes.js';
+import { defineGenerator } from '../registry.js';
 
 const list = (m) => (Array.isArray(m) ? m : [m]);
 
@@ -176,3 +177,13 @@ export function strata(g, o = {}) {
     return layerAt(bands, yy);
   });
 }
+
+// ---- registry (terrain examples make their own ground: meta.ground = false) ------------------------------
+const T_ = (fn, summary, example, meta = {}) => defineGenerator(fn, { category: 'terrain', summary, example, ground: false, ...meta });
+T_(tile, 'rectangular diorama slab (hills, rounded corners, ragged edges)', (g) => tile(g, [-8, -8], [8, 8], { hills: 2, corner: 2, edge: 0.5 }));
+T_(terrain, 'noise heightmap terrain with water, sand, cliffs, snow', (g) => terrain(g, [-8, -8], [8, 8], { water: 'water', waterLevel: 3 }));
+T_(island, 'floating island with craggy underside', (g) => island(g, [0, 10, 0], { radius: 8 }));
+T_(pond, 'water basin carved into the surface', (g) => { tile(g, [-9, -9], [9, 9], { depth: 4 }); pond(g, [0, 0], { radius: 5 }); });
+T_(river, 'river/stream along points', (g) => { tile(g, [-9, -9], [9, 9], { depth: 4 }); river(g, [[-9, -2], [0, 1], [9, 3]]); });
+T_(trail, 'dirt/cobble path painted on the surface', (g) => { tile(g, [-9, -9], [9, 9], { depth: 3 }); trail(g, [[-9, -5], [0, 0], [9, -4]]); });
+T_(strata, 'horizontal rock bands on cliffs', (g) => { g.box([-3, 0, -3], [3, 12, 3], 'stone'); strata(g, { on: ['stone'] }); });

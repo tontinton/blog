@@ -21,6 +21,9 @@ node shot.mjs /voxel/<slug>/ --query 'lookjson={"dof":{"enabled":true}}'
 node shot.mjs /voxel/<slug>/ --ui --wait 1500 --out out/ui.png   # real page: title, loader, ?debug panel
 node shot.mjs /voxel/<slug>/ --size 1200x630 --out ../../static/voxel/<slug>/preview.jpg   # og:image
 node shot.mjs /voxel/_lab/ --query scene=loft               # unpublished lab scenes (voxel/lab/*.js)
+node shot.mjs /voxel/<slug>/ --query 'target=12,4,-3' --zoom 4      # close-up on a point (check details)
+node shot.mjs /voxel/<slug>/ --query region=market --views 4        # big world: only that region
+node shot.mjs /voxel/_lab/ --query 'scene=catalog&kind=creature' --page --t 4   # registry catalog (labels need --page)
 ```
 It prints page console output, page errors (exit code 1) and `stage.stats()`:
 `{ voxels, quads, meshMs, bakeMs, lightGroups, particles, bounds, ... }`. Then **read the PNG** and judge.
@@ -29,10 +32,16 @@ A typical shot takes 4–10 s; 750k voxels ~15 s.
 Shot mode (`?shot`) hides all UI, disables damping/auto-rotate, freezes time at `t=0` (or `--t`), and the
 canvas is captured directly, so images are deterministic.
 
-## Unit tests (no browser, ~0.5 s)
+## Unit tests (no browser, ~1 s)
 ```sh
-node test.mjs                     # grid/shapes/palette layout/mesher invariants (winding, AO, merge, bakes)/vox
+node test.mjs                     # grid/shapes/palette layout/mesher invariants (winding, AO, merge, bakes)/vox,
+                                  # every registered generator/creature (from its example), actors simulation
 ```
+Generators exported from `gen/*.js` but not registered fail the test — register them (extending.md).
+
+## Catalog (see what the lib can do)
+`/voxel/_lab/?scene=catalog` renders every registered generator, one labelled cell each;
+`&kind=creature` (animated), `&kind=shading`, `&category=nature|terrain|build`, `&only=oak,pine`.
 
 ## Smoke test (run after changing the lib)
 ```sh

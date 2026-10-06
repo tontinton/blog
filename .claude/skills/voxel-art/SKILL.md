@@ -7,7 +7,7 @@ description: Create, edit or restyle 3D voxel art pieces (isometric dioramas, cu
 
 Everything lives in two places:
 - `static/voxel/lib/` — the published no-build ES-module library (three.js r186 vendored). Pieces import `../lib/index.js`.
-- `voxel/` (repo root, unpublished) — `README.md` (start here), `docs/{api,looks,cookbook,tools}.md`, `template/`, `lab/` (worked examples / tests), `tools/` (`new.mjs`, `shot.mjs`, `serve.mjs`).
+- `voxel/` (repo root, unpublished) — `README.md` (start here), `docs/{api,looks,cookbook,animation,big-scenes,extending,tools}.md`, `template/`, `lab/` (worked examples / tests), `tools/` (`new.mjs`, `shot.mjs`, `serve.mjs`, `test.mjs`, `check.mjs`).
 
 ## Workflow
 
@@ -15,13 +15,21 @@ Everything lives in two places:
    for lighting/mood, `docs/cookbook.md` for technique recipes. Skim the closest lab scene
    (`voxel/lab/forest.js` toy tile, `loft.js` interiors, `bigisland.js` big nature, `neon.js` night city,
    `bunny.js` characters + DOF, `village.js`/`harbor.js` people/boats/waterfalls, `features.js`
-   hooks/instances/pivots/picking) and the demo `static/voxel/cottage/scene.js`.
+   hooks/instances/pivots/picking, `cat.js` animals/walkers/birds + windmill, `bigworld.js` parallel
+   region world) and the demo `static/voxel/cottage/scene.js`. Browse what exists:
+   `node shot.mjs /voxel/_lab/ --query 'scene=catalog' --page` (`&kind=creature`, `&kind=shading`).
+   Missing a generator/shading/creature? **Extend the lib first** (`docs/extending.md`: implement,
+   register with an example, check in the catalog, `node test.mjs`), then make the art.
+   Big scene (city, landscape, > ~1M voxels) or several authors? `docs/big-scenes.md`: `stage.world()`
+   with one region module per subagent, a shared `layout.js`/`palette.js`/`assets.js`.
 2. Scaffold: `cd voxel/tools && node new.mjs <slug> "Title" "Description." <look>` → `static/voxel/<slug>/`.
 3. Build in `scene.js`: palette (`{ ...NATURE, ...BUILD, ...own }`) → grid → shapes/generators →
-   `stage.add(g, { bake: { ao: true, light: true } })` → particles → `stage.start()`.
+   `stage.add(g, { bake: { ao: true, light: true } })` → particles → life (`stage.actors({ creature: 'cat' })`,
+   `stage.animate(blades, { spin })`, `docs/animation.md`) → `stage.start()`.
 4. Look at it, every iteration: `node shot.mjs /voxel/<slug>/ --views 4 --size 640x480`, then Read the PNG.
    Fix form first (`--query look=clay`), then palette, then look (`--query 'lookjson={...}'` for A/B).
-   Page errors and shader errors print to the console and fail the shot.
+   Page errors and shader errors print to the console and fail the shot. Close-ups:
+   `--query 'target=x,y,z' --zoom 4`; animated scenes: `--t 5` (actors replay deterministically to t).
 5. Finish: `node shot.mjs /voxel/<slug>/ --size 1200x630 --out ../../static/voxel/<slug>/preview.jpg`,
    fill in `static/voxel/pieces.json` (title, description, tags), commit.
 

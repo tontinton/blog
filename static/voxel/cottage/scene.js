@@ -1,5 +1,6 @@
 // Cottage — the "hello world" of the voxel lib: a tile, a house, some trees, a pond, glowing
-// windows, chimney smoke and fireflies at golden hour. Everything comes from ../lib.
+// windows, chimney smoke, fireflies, a cat on the prowl and a duck on the pond at golden hour.
+// Everything comes from ../lib.
 import { Stage, VoxelGrid, Palette, NATURE, BUILD, tile, house, oak, pine, pond, reeds, flower, fence, lamppost, smoke, scatter, grassTuft, cover, rock } from '../lib/index.js';
 
 const stage = new Stage({
@@ -43,4 +44,6 @@ scatter(g, (x, y, z, R) => (R.chance(0.2) ? flower(g, [x, y, z], { R, height: 1,
 await stage.progress('Lighting', 0.8);
 stage.add(g, { bake: { ao: true, light: true } });
 stage.particles({ preset: 'fireflies', count: 45 });
+stage.actors({ creature: 'cat', options: { coat: 'orange' }, area: [[-12, -2], [12, 14]], seed: 2 });
+stage.actors({ creature: 'duck', on: 'water', seed: 3 });
 stage.start();

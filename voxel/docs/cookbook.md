@@ -103,6 +103,8 @@ Exteriors: `bench, signpost (with text), campfire, bridge, boat, car, well, fenc
 ### Little people
 `person(g, [x, 1, z], { side: '+z', pose: 'wave', seed: 3 })` — 2×1 footprint, ~7 tall, random skin/shirt/
 pants/hair per seed (or pass ids). Populate scenes sparsely: 3–8 people make a diorama feel alive.
+Walking people: `stage.actors({ creature: 'walker', count: 6, variants: 3, behavior: 'path', path })`
+(same size/style as `person`) — mix a few static ones (sitting, waving) with walkers.
 
 ### Characters and small precise models
 Model with boxes, then details with `ascii` on the face; or author slices with `layers`. Model half and
@@ -121,14 +123,18 @@ Emissive + `light` materials and `bake: { light: true }` give dozens of real-loo
 For moving lights (a lighthouse beam, a car): `stage.light({ type: 'spot', position, target, color })`
 and move it in `onUpdate`. Glow halos come from bloom; keep `bloom.threshold` ≥ 1.4 so only emissives glow.
 
-### Animation
+### Animation (full guide: animation.md)
 ```js
-const blade = stage.add(bladeGrid, { pivot: [0, 0, 0], position: [10, 22, 4] });  // origin at the hub
-stage.onUpdate((t, dt) => { blade.rotation.z = t * 0.8; boat.position.y = Math.sin(t) * 0.3; });
+stage.animate(stage.add(bladeGrid, { pivot: [0, 0, 0], position: [10, 22, 4], fit: false }), { spin: [0, 0, 0.8] });
+stage.animate(boat, { bob: 0.3, sway: 0.04 });
+stage.actors({ creature: 'cat', count: 2 });                                   // a cat running around
+stage.actors({ creature: 'bird', count: 5, center: [0, 30, 0], radius: 20 });  // gulls circling
 ```
 - Wind: `sway` on materials (+ `look.wind`). Glow: `flicker`. Water ripples: automatic.
-- Frame animation (a walking creature): build 2–4 grids, `stage.add` each, toggle `group.visible`.
-- Shader animation: `hooks` (pulsing runes, scrolling lights) — see api.md.
+- Creatures (cats, dogs, sheep, people, birds, ducks, fish…) walk the terrain, avoid walls/water, idle,
+  follow paths or each other — `stage.actors`, instanced (cheap). Custom ones: `rig()` + `defineCreature`.
+- Shader animation: `shading: 'pulse'` or `hooks` (pulsing runes, scrolling lights) — see api.md.
+- A little life goes far: 1–3 animals and a couple of walkers per diorama; birds/butterflies for the sky.
 
 ### Restyling the shading
 Looks cover most moods; for a different *shading model* use hooks. Cel shading (`lab/cel.js`):
@@ -166,3 +172,5 @@ stage.add(grid);             // or g.stamp(grid, x, y, z) to merge into a scene
   it matters (doubles scene render), DOF ~1 ms at 1080p.
 - `await stage.progress('label', 0.5)` between heavy steps so the loader animates.
 - Use `instances` for many identical props (a forest of the same 3 trees in 3 calls).
+- Bigger than ~1M voxels, or built by several authors in parallel: `stage.world()` with region modules
+  (worker-built, clustered, culled) — see big-scenes.md. `look.sun.update: 'static'` for huge static scenes.

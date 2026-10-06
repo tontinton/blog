@@ -28,6 +28,7 @@ const g = new VoxelGrid(palette)   // palette optional, but needed to use names
 | `replace(from, to, a?, b?)` | swap one material for another |
 | `surface((x,y,z,id) => …, dir = [0,1,0])` | voxels whose neighbor in `dir` is empty (tops by default) |
 | `top(x, z, fromY?)` → y \| -Infinity | highest solid voxel in a column |
+| `tops(x0, z0, x1, z1)` → `{ x0, z0, W, D, y: Int32Array, id: Uint16Array }` | top surface of a rectangle in one pass over its chunks (fast; empty columns = -2³¹) |
 | `bounds()` → `{ min, max, size }` \| null | exact, cached |
 | `count()`, `clear()`, `clone()` | |
 | `stamp(src, x, y, z, { rot, flipX, flipZ, mode, remap, center })` | copy another grid; `rot` = quarter turns about Y; palettes merge by material name; `center: true` = `(x,y,z)` is where src's bottom-center lands |
@@ -141,13 +142,18 @@ const stage = new Stage({
 
 | member | |
 |---|---|
-| `add(grid, opts)` → `THREE.Group` | mesh + add. opts: `palette`, `position`, `rotation` (deg Y or `[x,y,z]`), `scale`, `center` (`false` default → grid coords = world coords; `'bottom'`/`'center'`), `pivot: [x,y,z]` (group origin at this grid point — rotate a blade around its hub), `instances: [[x,y,z,rotY,scale] \| {position,rotation,scale}]`, `bake: { ao: true \| { radius: 6, rays: 20 }, light: true }`, `ao` (vertex AO, true), `greedy` (true), `hooks` (GLSL, below), `shadow`, `receive`, `fit` (camera fit, true), `contact` (ground contact shadow, true), `name` |
+| `add(grid, opts)` → `THREE.Group` | mesh + add. opts: `palette`, `position`, `rotation` (deg Y or `[x,y,z]`), `scale`, `center` (`false` default → grid coords = world coords; `'bottom'`/`'center'`), `pivot: [x,y,z]` (group origin at this grid point — rotate a blade around its hub), `instances: [[x,y,z,rotY,scale] \| {position,rotation,scale}]`, `bake: { ao: true \| { radius: 6, rays: 20 }, light: true }`, `ao` (vertex AO, true), `greedy` (true), `hooks` (GLSL, below), `shading` (`'cel'` \| `['cel', 'rim']` — registered hook bundles), `cluster` (4: mesh as N×N-chunk columns, frustum-culled; 0 = one mesh), `keepGrid` (true; false frees the voxels after meshing), `shadow`, `receive`, `fit` (camera fit, true), `contact` (ground contact shadow, true), `name` |
+| `addAsync(grid, opts)` → Promise\<Group\> | `add` with cluster meshing + bakes in Web Workers (`workers: n \| 0`, `onProgress(f)`) |
+| `world(spec)` → Promise\<`{ group, grid, palette, assets, extras, stats }`\> | big scene from parallel region modules — see [big-scenes.md](big-scenes.md) |
+| `actors(opts)` → Actors | animated creatures (`{ creature, count, variants, behavior, area, path, target, on, … }`) — see [animation.md](animation.md) |
+| `animate(obj, { spin: [x,y,z] rad/s, bob, sway, speed, phase })` | procedural motion for any object/group |
 | `rebuild(group)` | re-mesh after editing `group.userData.model.grid` |
 | `remove(group)` | |
 | `addObject(obj3d, { fit })` | any three.js object |
 | `light({ type: 'point'\|'spot', position, color, intensity: 20, distance: 30, decay: 1.6, shadow, target, angle, penumbra })` | real dynamic light |
 | `particles(opts)` → Particles | see below |
 | `onUpdate((t, dt) => …)` | per frame; `t` frozen by `?t=` |
+| `models`, `actorSystems`, `particleSystems` | what's been added (`model = group.userData.model`: `{ grid, palette, opts, meshes, stats }`) |
 | `progress(text, fraction)` | async: update loader, yield a frame (await between heavy steps) |
 | `setLook(spec)` / `updateLook(patch)` | live look change (deep-merged) |
 | `setView({ yaw, pitch, zoom, target })` | |
@@ -157,7 +163,11 @@ const stage = new Stage({
 | `stats()` | voxels, quads, mesh/bake ms, draw calls, bounds… |
 | `scene camera renderer controls sun fill ambient ground post` | the raw three.js objects — use freely |
 | `uniforms` | shared voxel uniforms: `uTime, uWind, uAO, uBevel, uLook, uWater, uSeed` (see material.js) |
-| `look`, `bounds` (Box3), `radius`, `time` | |
+| `look`, `bounds` (Box3), `radius`, `time`, `fixedTime` (frozen clock or null) | |
+
+URL params every piece understands: `?debug` (tweak panel + stats overlay), `?look=name`,
+`?lookjson={…}`, `?t=seconds`, `?yaw= &pitch= &zoom=`, `?target=x,y,z` (close-ups), `?dpr=`, `?region=a,b`
+(world: build only those), `?shot` (used by shot.mjs).
 
 Animating lighting every frame: change `stage.sun.intensity/color/position`, `stage.scene.environmentIntensity`,
 `stage.uniforms.uLook.value.x` (emissive multiplier) directly — `updateLook` rebuilds the environment and
@@ -178,6 +188,35 @@ stage.add(g, { hooks: {
 }});
 P.add('rune', { color: '#335', custom: [2, 0, 0, 0] });   // mc.x = 2 for rune voxels only
 ```
+
+---
+
+## Actors (`actors.js`, creatures in `gen/creatures.js`)
+
+Full guide: [animation.md](animation.md). `stage.actors(opts)` → `Actors` with `.agents` (live
+`{ x, y, z, heading, speed, state }`), `.object`, `.ground` (`at(x,z)`, `ok(x,z)`, `region(x,z)`), `.dispose()`.
+Options: `creature` (name \| rig \| factory), `options` (creature opts or array = variants), `variants`, `count`,
+`behavior` (`'wander' 'path' 'follow' 'circle' 'flock' 'still'` \| `(ag, dt, t, actors) => {}`), `area`,
+`groups: [{ area \| path, count }]`, `path`, `loop`, `spread`, `center`, `radius`, `altitude`, `target`,
+`spacing`, `ground` (`'auto'` \| grid \| group \| y), `on` (`'ground'` \| `'water'`), `maxStep`, `region`,
+`speed`, `scale`, `tints`, `idle`, `sprint`, `shadow` (`'auto'` \| true \| `'blob'` \| false), `seed`.
+
+Creatures: `cat dog fox sheep pig walker bird butterfly duck fish` (+ `quadruped(opts)` builder).
+`rig(parts, { scale, speed, stride, sprint, idle, lift, fly, swim, anim })` makes your own; parts are
+`{ name, role: 'body'|'head'|'tail'|'leg'|'arm'|'wing'|'fin'|'static', side, pair, grid, pivot, animate }`.
+`heightField(sources, area, on, clear, maxStep)` is the terrain sampler actors use.
+
+---
+
+## Registry (`registry.js`)
+
+Full guide: [extending.md](extending.md). `defineGenerator(fn, { category, summary, example, ground })`,
+`defineCreature(name, factory, { summary, habitat, example })`, `defineShading(name, hooks, meta)`,
+`defineLook(name, look)`, `defineParticles(name, preset)`; `list(kind)`, `lookup(kind, name)`,
+`register(kind, name, value, meta)`, `combineHooks(hooks, shading)`.
+Built-in shadings: `cel` (3-band toon), `rim` (`uRim`), `posterize` (`uPosterize`), `pulse` (glow on
+materials with `custom: [strength, speed]`), `height-tint` (`uTintLow`, `uTintRange`), `hatch` (`uHatch`).
+The lab catalog renders any kind: `?scene=catalog[&kind=creature|shading][&category=build][&only=a,b]`.
 
 ---
 
@@ -226,6 +265,7 @@ All accept `seed` (or `R`, an rng) and material overrides. Foliage uses `mode: '
 · `person(g, p, { side, pose: 'stand'|'wave'|'sit', height: 7|8, skin, shirt, pants, hair, hat, seed })` — tiny ~7-voxel people (random colors per seed)
 · `bridge(g, a, b, { width, arch, deck, rail, post })` · `boat(g, keelStern, { length, width, height, hull, hullTop, deck, cabin, mast })` (clears its interior — drop it into water)
 · `car(g, p, { color, axis, glass, wheel, light })`
+· (all registered with examples — `?scene=catalog` in the lab shows each one)
 · nature.js also has `waterfall(g, top, bottomY, { width, depth, water, foam })` (pair with `stage.particles({ preset: 'mist', box })`)
 
 ---
@@ -244,4 +284,6 @@ All accept `seed` (or `R`, an rng) and material overrides. Foliage uses `mode: '
   `parseVox(arrayBuffer, opts)`. Materials are named `vox<index>-<hex>`; translations are applied, rotations
   ignored; files without an RGBA chunk get a grey ramp.
 - Low level: `buildMesh(grid, palette, opts)`, `createVoxelMaterial`, `createVoxelDepthMaterial`,
-  `createVoxelUniforms`, `Post`, `resolveLook`, `merge`, `LOOKS`, `DEFAULT_LOOK`, `PARTICLE_PRESETS`.
+  `createVoxelUniforms`, `Post`, `resolveLook`, `merge`, `LOOKS`, `DEFAULT_LOOK`, `PARTICLE_PRESETS`,
+  `clusterChunks`, `clusterInputs`, `geometryFromArrays`, `WorkerPool`/`getPool`, `runRegion`, `runAssets`,
+  `mergeInto`, `loadPaletteDefs`, `Palette#serialize/deserialize/absorb` (worker transfer).

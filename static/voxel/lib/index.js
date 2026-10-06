@@ -17,9 +17,11 @@ export { createVoxelMaterial, createVoxelDepthMaterial, createVoxelUniforms, GLS
 export { Post } from './post.js';
 export { LOOKS, DEFAULT_LOOK, resolveLook, merge } from './looks.js';
 export { Particles, PARTICLE_PRESETS } from './particles.js';
+export { Actors, rig, heightField } from './actors.js';
 export { Stage } from './stage.js';
 export { loadVox, parseVox } from './vox.js';
 export * from './gen/nature.js';
 export * from './gen/terrain.js';
 export * from './gen/build.js';
+export * from './gen/creatures.js';
 export * as THREE from './three.js';

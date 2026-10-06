@@ -27,4 +27,5 @@ tile(g, [-12, -12], [12, 12], { depth: 5 });
 await stage.progress('Lighting', 0.8);
 stage.add(g, { bake: { ao: true, light: true } });
 // stage.particles({ preset: 'fireflies' });   // dust snow rain embers petals leaves cubes smoke mist sparkles bubbles
+// stage.actors({ creature: 'cat', count: 2 }); // dog fox sheep pig walker bird butterfly duck fish — docs/animation.md
 stage.start();
