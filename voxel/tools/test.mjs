@@ -1,7 +1,8 @@
 // Fast unit tests for the non-WebGL parts of the lib (grid, shapes, palette, mesher, bakes, vox).
 //   node test.mjs        (≈1 s, no browser) — run with check.mjs after changing the lib.
 import assert from 'node:assert/strict';
-import { VoxelGrid, Palette, buildMesh, parseVox, rng, hash3, MAT_TEXELS, MAT_PER_ROW } from '../../static/voxel/lib/index.js';
+import * as V from '../../static/voxel/lib/index.js';
+import { VoxelGrid, Palette, buildMesh, parseVox, rng, hash3, MAT_TEXELS, MAT_PER_ROW, NATURE, BUILD } from '../../static/voxel/lib/index.js';
 
 let passed = 0, failed = 0;
 const test = (name, fn) => {
@@ -204,6 +205,35 @@ test('parseVox: z-up → y-up, palette colors', () => {
   assert.deepEqual(b.size, [1, 2, 1]); // stacked along vox z → our y
   const top = grid.get(b.min[0], b.max[1], b.min[2]);
   assert.equal(palette.defs[top].src.color, '#0000ff');
+});
+
+// ---- generators: every one runs, writes voxels, and is deterministic per seed -----------------------
+const GEN = {
+  oak: (g) => V.oak(g, [0, 1, 0], { seed: 3 }), blossom: (g) => V.blossom(g, [0, 1, 0], { seed: 3 }), bush: (g) => V.bush(g, [0, 1, 0], { seed: 3 }),
+  pine: (g) => V.pine(g, [0, 1, 0], { seed: 3, snow: 'snow' }), palm: (g) => V.palm(g, [0, 1, 0], { seed: 3 }), willow: (g) => V.willow(g, [0, 1, 0], { seed: 3 }),
+  branches: (g) => V.branches(g, [0, 1, 0], { seed: 3 }), rock: (g) => V.rock(g, [0, 1, 0], { seed: 3, moss: 'moss' }),
+  flower: (g) => V.flower(g, [0, 1, 0], { seed: 3 }), mushroom: (g) => V.mushroom(g, [0, 1, 0], { dots: 'petalWhite' }), reeds: (g) => V.reeds(g, [0, 1, 0], { seed: 3 }),
+  cloud: (g) => V.cloud(g, [0, 20, 0], { seed: 3 }), smoke: (g) => V.smoke(g, [0, 10, 0], { seed: 3 }), waterfall: (g) => V.waterfall(g, [0, 10, 0], 0),
+  tile: (g) => V.tile(g, [-8, -8], [8, 8], { hills: 2, corner: 2, edge: 0.5 }), terrain: (g) => V.terrain(g, [-8, -8], [8, 8], { water: 'water', waterLevel: 3 }),
+  island: (g) => V.island(g, [0, 10, 0], { radius: 8 }), pondRiver: (g) => { V.tile(g, [-10, -10], [10, 10]); V.pond(g, [0, 0], { radius: 3 }); V.river(g, [[-9, 5], [9, 6]]); V.trail(g, [[-9, -5], [9, -4]]); },
+  strata: (g) => { g.box([0, 0, 0], [5, 9, 5], 'stone'); V.strata(g, { on: ['stone'] }); },
+  coverVines: (g) => { g.box([0, 0, 0], [8, 6, 8], 'stone'); V.cover(g, { on: ['stone'], with: 'moss' }); V.vines(g, { on: ['stone'], density: 0.3 }); },
+  scatter: (g) => { V.tile(g, [-6, -6], [6, 6]); V.scatter(g, (x, y, z, R) => V.grassTuft(g, [x, y, z], { R }), { on: ['grass'], density: 0.3 }); },
+  house: (g) => V.house(g, [0, 1, 0], { chimney: true, lit: 0.5, seed: 3 }), walls: (g) => V.walls(g, [0, 1, 0], [8, 5, 6], 'brick', { openings: [{ side: '+z', w: 2, h: 3 }] }),
+  fence: (g) => V.fence(g, [[0, 1, 0], [9, 1, 0], [9, 1, 6]]), stairs: (g) => V.stairs(g, [0, 1, 0], '+x', 5, 'plank', { width: 2 }), ladder: (g) => V.ladder(g, [0, 1, 0], 5),
+  lamppost: (g) => V.lamppost(g, [0, 1, 0], { arm: '+x' }), well: (g) => V.well(g, [0, 1, 0]), truss: (g) => V.truss(g, [0, 1, 0], [0, 12, 0]),
+  facade: (g) => { g.box([0, 0, 0], [10, 12, 4], 'concrete'); V.facade(g, [0, 1, 4], [10, 11, 4], { seed: 3 }); },
+  props: (g) => { V.crate(g, [0, 1, 0]); V.barrel(g, [4, 1, 0]); V.table(g, [8, 1, 0]); V.chair(g, [12, 1, 0]); V.bed(g, [0, 1, 6]); V.bookshelf(g, [8, 1, 6]); V.fireplace(g, [14, 1, 6]); },
+  bricks: (g) => V.bricks(g, [0, 0, 0], [12, 6, 1]), person: (g) => V.person(g, [0, 1, 0], { seed: 3, pose: 'wave' }), campfire: (g) => V.campfire(g, [0, 1, 0]),
+  bench: (g) => V.bench(g, [0, 1, 0]), signpost: (g) => V.signpost(g, [0, 1, 0], { text: 'HI' }), lantern: (g) => V.lantern(g, [0, 8, 0]),
+  bridge: (g) => V.bridge(g, [0, 1, 0], [10, 1, 0], { arch: 2 }), boat: (g) => V.boat(g, [0, 0, 0], { cabin: true, mast: 5 }), car: (g) => V.car(g, [0, 1, 0]),
+};
+for (const [name, fn] of Object.entries(GEN)) test(`generator ${name}`, () => {
+  const make = () => { const Q = new Palette({ ...NATURE, ...BUILD }); const g = new VoxelGrid(Q); fn(g); return g; };
+  const a = make(), b = make();
+  assert.ok(a.count() > 0, 'wrote no voxels');
+  assert.deepEqual(cells(a), cells(b), 'not deterministic');
+  buildMesh(a, a.palette, { bake: { ao: true, light: true } });
 });
 
 console.log(`${passed} passed, ${failed} failed`);
