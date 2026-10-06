@@ -6,7 +6,7 @@
 //   import { house, oak, person } from '../../lib/index.js';
 //   export const box = [[0, 0, 0], [127, 63, 127]];        // optional: writes outside are dropped (with a warning)
 //   export default function build(g, ctx) {                 // may be async
-//     const R = ctx.rng;                                    // seeded per region
+//     const R = ctx.rng;                                    // seeded per region (ctx.clip = true: drop overshoot silently)
 //     house(g, [10, 1, 10], { seed: R.int(0, 1e6) });
 //     ctx.instance('palm', [40, 1, 40], 90);                // instanced asset (from the assets module)
 //     ctx.emit('particles', { preset: 'smoke', box: [[...], [...]] });
@@ -60,6 +60,9 @@ export async function runRegion(region, paletteList) {
     rng: rng(seed), noise: noise(seed),
     emit: (kind, data) => extras.push({ kind, data, region: name }),
     instance: (asset, p, rot = 0, scale = 1) => instances.push([asset, p[0], p[1], p[2], rot, scale]),
+    /** Is (x, y, z) inside this region's box? */
+    inside: (x, y, z) => !box || (x >= box[0][0] && y >= box[0][1] && z >= box[0][2] && x <= box[1][0] && y <= box[1][1] && z <= box[1][2]),
+    clip: false, // set true when you overshoot the box on purpose (rocks/trees at the edge): drop silently
   };
   await build(g, ctx);
   let dropped = 0;
@@ -72,7 +75,7 @@ export async function runRegion(region, paletteList) {
   }
   const chunks = [];
   for (const c of g.chunks.values()) if (c.data.some((v) => v)) chunks.push({ cx: c.cx, cy: c.cy, cz: c.cz, data: c.data });
-  return { name, chunks, additions: P.serialize(firstId), firstId, extras, instances, dropped, ms: Math.round(performance.now() - t0) };
+  return { name, chunks, additions: P.serialize(firstId), firstId, extras, instances, dropped: ctx.clip ? 0 : dropped, ms: Math.round(performance.now() - t0) };
 }
 
 /** Build assets (instanced models) → { name: { chunks, additions, firstId } }. */

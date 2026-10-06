@@ -62,16 +62,20 @@ surface water (ducks, fish, boats); swimmers float with their rig's `lift`.
 
 **Ground.** Actors read the voxels of every model (`ground: 'auto'`; or pass a grid/group/number) once
 at creation into a height field: they step up/down at most `maxStep` (1), treat water as a wall (unless
-`on: 'water'`), walk over 1-voxel tufts/flowers and under tree canopies (swaying voxels ≥ creature height
-overhead), and around bushes. Create actors **after** `stage.add` (and with `keepGrid` true — `world()`
+`on: 'water'`), walk through swaying tufts ≤ 2 voxels tall, and walk **under any overhang with at least
+creature-height + 1 voxels of air beneath it** (walkers: 8, cats: 5) — tree canopies, awnings, arches,
+bunting, bridges, porch roofs — whatever its material. Lower overhangs, bushes, walls, counters and
+fences are obstacles. Wandering stays inside the largest connected walkable region of `area` (so
+rooftops and closed courtyards are never used). Create actors **after** `stage.add` (and with `keepGrid` true — `world()`
 handles this itself).
 
 **Shadows.** `shadow: 'auto'` = real shadow-map shadows (when `look.sun.update` is `'always'`), else a soft
 blob under each agent (cheap, works with static shadow maps). Force with `true | 'blob' | false`.
 
-**Variety & cost.** One actor system = one InstancedMesh per rig part → `parts` draw calls whether there
-are 1 or 500 agents (+1 for blob shadows). `variants: n` builds n rigs from different seeds (varied clothes
-/ coats) at n × parts draw calls; `options: [{ coat: 'black' }, { coat: 'white' }]` gives explicit variants;
+**Variety & cost.** A rig's parts are merged into one geometry and drawn as one rigged InstancedMesh
+(joint matrices live in a float texture): **one draw call per variant** (+1 in the shadow pass, or +1 for
+all blob shadows) whether there are 1 or 500 agents. `variants: n` builds n rigs from different seeds
+(varied clothes / coats); `options: [{ coat: 'black' }, { coat: 'white' }]` gives explicit variants;
 `tints: ['#fff', '#fc9']` multiplies colors per instance for free. Per frame each agent costs one matrix
 per part: measured 0.37 ms/frame of CPU for 400 agents (300 walkers + 100 cats) — hundreds are fine.
 Creating a system samples the terrain once (~0.3 s for a 256×256 area).

@@ -1,7 +1,8 @@
 // Actors: animated voxel creatures (cats, people, birds, ducks…) that wander, follow paths, circle, flock or
 // follow each other, walking on the terrain. A creature is a *rig*: a few small voxel grids (parts) with
-// joints. Each part is one InstancedMesh, so 1 or 500 cats cost the same draw calls; per frame only instance
-// matrices are written (~1 µs per part per agent).
+// joints. All parts are merged into one geometry (vertices tagged with their part) and drawn as ONE
+// InstancedMesh per variant; each agent's joint matrices go into a small float texture the vertex shader
+// reads — 1 or 500 cats cost one draw call (+1 in the shadow pass); per frame only matrices are written.
 //
 //   stage.actors({ creature: 'cat', count: 3, area: [[-20, -20], [20, 20]] });          // wander, terrain-aware
 //   stage.actors({ creature: 'walker', count: 12, variants: 4, behavior: 'path', path: [[0, 0], [30, 0], [30, 20]] });
@@ -14,7 +15,7 @@
 // one variant each), variants (n rigs from different seeds — e.g. walkers with varied clothes; n × parts
 // draw calls), count, behavior ('wander' | 'path' | 'circle' | 'flock' | 'follow' | 'still' | fn),
 // area [[x0,z0],[x1,z1]] (wander/spawn region; default: the ground's bounds), groups [{ area, count }] (one
-// system over several areas), path [[x,z] | [x,y,z], …],
+// system over several areas/paths/circles: [{ area | path | center + radius, count }]), path [[x,z] | [x,y,z], …],
 // loop (true), spread (path lane jitter), center [x,y,z] + radius (circle/flock), target (follow: Actors |
 // agent | Object3D | [x,z] | t → [x,z]), spacing (follow gap), ground ('auto' = every model | VoxelGrid |
 // group | number), on ('ground' | 'water'), maxStep (1, climbable step), region ('main' = stay in the largest
@@ -33,7 +34,7 @@
 //   'arm' (swing opposite the legs), 'wing' (flap; side ±1), 'fin' (wiggle), 'static'.
 //   part.animate({ t, agent, moving, phase }) → { rx, ry, rz } overrides the role's rotation (radians).
 import * as THREE from './three.js';
-import { buildMesh } from './mesher.js';
+import { buildMesh, geometryFromArrays } from './mesher.js';
 import { createVoxelMaterial, createVoxelDepthMaterial } from './material.js';
 import { rng } from './random.js';
 import { srgbToLinear } from './color.js';
@@ -103,9 +104,9 @@ function areaOf(src) {
 
 /**
  * Walkable height field over `area`: at(x, z) → feet y, ok(x, z) → can stand here (solid ground, or water
- * when on = 'water'). Swaying voxels (grass tufts, flowers, tree canopies) are see-through when they are
- * a 1-voxel tuft or float ≥ `clear` voxels above the ground, so creatures walk over flowers and under trees
- * but around bushes. region()/mainRegion() label connected walkable areas so creatures stay off roofs.
+ * when on = 'water'). Swaying tufts (≤ 2 voxels) are walked through and anything with ≥ `clear` voxels of
+ * headroom beneath it (canopies, awnings, arches, bunting, bridges) is walked under; bushes, walls, stall
+ * counters are obstacles. region()/mainRegion() label connected walkable areas so creatures stay off roofs.
  */
 export function heightField(src, area, on = 'ground', clear = 4, maxStep = 1) {
   const [x0, z0] = area[0].map(Math.floor), [x1, z1] = area[1].map(Math.ceil);
@@ -118,7 +119,7 @@ export function heightField(src, area, on = 'ground', clear = 4, maxStep = 1) {
     for (let i = 0; i < W * D; i++) {
       let y = T.y[i], id = T.id[i];
       if (y === -2147483648) continue;
-      if (defs[id]?.sway > 0) [y, id] = seeThrough(g, defs, T.x0 + (i % W), T.z0 + Math.floor(i / W), y, clear);
+      [y, id] = surface(g, defs, T.x0 + (i % W), T.z0 + Math.floor(i / W), y, clear);
       if (y === -Infinity) continue;
       const h = y + 1 + oy;
       if (h > hf[i]) { hf[i] = h; kind[i] = defs[id]?.kind > 0 ? 2 : 1; }
@@ -164,15 +165,22 @@ function label(hf, kind, want, W, D, maxStep) {
   }
   return comp;
 }
-function seeThrough(g, defs, x, z, y, clear) {
-  let lo = y; // lowest voxel of the swaying stack
-  while (g.get(x, lo - 1, z) && defs[g.get(x, lo - 1, z)]?.sway > 0) lo--;
-  const below = g.top(x, z, lo - 1);
-  if (below === -Infinity) return [-Infinity, 0];
-  if (defs[g.get(x, below, z)]?.sway > 0) return [y, g.get(x, y, z)];
-  const gap = lo - below - 1;
-  if ((gap === 0 && y === lo) || gap >= clear) return [below, g.get(x, below, z)]; // tuft, or canopy overhead
-  return [y, g.get(x, y, z)]; // bush: obstacle
+// The walkable surface of column (x, z), starting from its top voxel y. Swaying tufts/flower stems (≤ 2 voxels
+// on solid ground) are walked through, and any overhang — tree canopy, awning, arch, bunting, bridge, roof
+// over a porch — with ≥ `clear` voxels of air beneath it is walked under. Everything else is the surface.
+function surface(g, defs, x, z, y, clear) {
+  for (let guard = 0; guard < 16; guard++) {
+    let s = 0;
+    while (s < 3 && defs[g.get(x, y - s, z)]?.sway > 0) s++;
+    const base = g.get(x, y - s, z);
+    if (s > 0 && s <= 2 && base && !(defs[base]?.sway > 0)) { y -= s; continue; } // tuft on the ground
+    let lo = y; // bottom of the solid run containing y
+    while (g.get(x, lo - 1, z)) lo--;
+    const below = g.top(x, z, lo - 1);
+    if (below !== -Infinity && lo - below - 1 >= clear) { y = below; continue; } // headroom: walk under
+    break;
+  }
+  return [y, g.get(x, y, z)];
 }
 
 // ---- actors -----------------------------------------------------------------------------------------
@@ -219,27 +227,28 @@ export class Actors {
     const n = this.o.count;
     // agents are dealt round-robin to the variants; each variant has its own instanced part meshes
     this.sets = this.rigs.map((rg, v) => {
-      const cap = Math.ceil((n - v) / nv);
-      const uniforms = { ...stage.uniforms, uMat: { value: rg.palette.texture() } };
-      const mat = createVoxelMaterial({ uniforms }), depth = createVoxelDepthMaterial({ uniforms });
-      const meshes = rg.parts.map((p) => {
-        const geo = buildMesh(p.grid, rg.palette, { greedy: true }).solid;
-        const m = new THREE.InstancedMesh(geo, mat, cap);
-        m.customDepthMaterial = depth;
-        m.castShadow = shadow === true; m.receiveShadow = true;
-        m.frustumCulled = false;
-        m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-        m.name = `${p.name ?? p.role ?? 'part'}`;
-        this.object.add(m);
-        return m;
-      });
-      return { rig: rg, uniforms, meshes, mat, depth };
+      const cap = Math.max(1, Math.ceil((n - v) / nv));
+      const stride = rg.parts.length * 3; // texels per agent (3×4 matrix per part)
+      const rows = Math.ceil((cap * stride) / 1024);
+      const rigTex = new THREE.DataTexture(new Float32Array(1024 * rows * 4), 1024, rows, THREE.RGBAFormat, THREE.FloatType);
+      rigTex.magFilter = rigTex.minFilter = THREE.NearestFilter;
+      const uniforms = { ...stage.uniforms, uMat: { value: rg.palette.texture() }, uRig: { value: rigTex }, uRigStride: { value: stride } };
+      const mat = createVoxelMaterial({ uniforms, rig: true }), depth = createVoxelDepthMaterial({ uniforms, rig: true });
+      const m = new THREE.InstancedMesh(mergeParts(rg), mat, cap);
+      m.count = Math.ceil((n - v) / nv);
+      m.customDepthMaterial = depth;
+      m.castShadow = shadow === true; m.receiveShadow = true;
+      m.frustumCulled = false;
+      m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+      m.name = `${this.o.creature ?? 'actor'}-${v}`;
+      this.object.add(m);
+      return { rig: rg, uniforms, meshes: [m], mesh: m, mat, depth, rigTex, stride };
     });
     if (this.o.tints) {
       const c = new THREE.Color();
       for (let i = 0; i < n; i++) {
         c.setRGB(...srgbToLinear(this.o.tints[i % this.o.tints.length]), THREE.LinearSRGBColorSpace);
-        for (const m of this.sets[i % nv].meshes) m.setColorAt(Math.floor(i / nv), c);
+        this.sets[i % nv].mesh.setColorAt(Math.floor(i / nv), c);
       }
     }
     if (shadow === 'blob') this.blob = makeBlobs(n);
@@ -266,7 +275,8 @@ export class Actors {
       const [x, z, hd, py] = this._pathAt(ag.path, ag.u);
       Object.assign(ag, { x, z, heading: hd, y: py ?? this._h(x, z, 0) });
     } else if (beh === 'circle' || beh === 'flock') {
-      ag.radius = (o.radius ?? 20) * R.range(0.7, 1.15); ag.alt = (o.center?.[1] ?? 30) + R.range(-4, 4); ag.ang = R() * Math.PI * 2; ag.dir = beh === 'flock' ? 1 : R.sign();
+      ag.center = gr?.center ?? o.center ?? [0, 30, 0];
+      ag.radius = (gr?.radius ?? o.radius ?? 20) * R.range(0.7, 1.15); ag.alt = ag.center[1] + R.range(-4, 4); ag.ang = R() * Math.PI * 2; ag.dir = beh === 'flock' ? 1 : R.sign();
       this._step(ag, 0, 0);
     } else if (beh === 'follow') {
       const [tx, tz] = this._targetPos(0) ?? [(a0[0] + a1[0]) / 2, (a0[1] + a1[1]) / 2];
@@ -348,7 +358,7 @@ export class Actors {
       return;
     }
     if (beh === 'circle' || beh === 'flock') {
-      const c = o.center ?? [0, 30, 0];
+      const c = ag.center;
       ag.speed = ag.maxSpeed;
       ag.ang += (ag.dir * ag.speed * dt) / ag.radius;
       const wob = Math.sin(t * 0.7 + ag.s * 20) * (beh === 'flock' ? 3 : 0.5);
@@ -412,7 +422,7 @@ export class Actors {
   /** Write instance matrices for time t. */
   pose(t) {
     for (const ag of this.agents) this._pose(ag, t);
-    for (const s of this.sets) { for (const m of s.meshes) m.instanceMatrix.needsUpdate = true; s.uniforms.uMat.value = s.rig.palette.texture(); }
+    for (const s of this.sets) { s.mesh.instanceMatrix.needsUpdate = true; s.rigTex.needsUpdate = true; s.uniforms.uMat.value = s.rig.palette.texture(); }
     if (this.blob) this.blob.instanceMatrix.needsUpdate = true;
     if (this.shadow === true && (this.stage.look?.sun?.update ?? 'always') !== 'always') this.stage._shadowDirty = true;
   }
@@ -424,6 +434,8 @@ export class Actors {
     const bob = r.fly ? 0 : r.swim ? Math.sin(t * 2 + ag.s * 9) * 0.08 : Math.abs(sw) * A.bob * moving;
     _m.compose(_v.set(ag.x, ag.y + (this.lift + bob) * ag.scale, ag.z), _q.setFromAxisAngle(_y, ag.heading), _s.setScalar(ag.scale));
     _m.multiply(_t.makeTranslation(-c[0], 0, -c[2]));
+    set.mesh.setMatrixAt(ag.li, _m);
+    const D = set.rigTex.image.data, base = ag.li * set.stride * 4;
     const flap = r.fly ? Math.sin(t * A.flapSpeed + ag.s * 6) * (A.glide ? Math.max(0, Math.sin(t * 0.8 + ag.s * 13) * (1 + A.glide) - A.glide) : 1) : 0;
     for (let pi = 0; pi < r.parts.length; pi++) {
       const part = r.parts[pi];
@@ -445,9 +457,12 @@ export class Actors {
         _r.makeRotationFromEuler(_e.set(rx, ry, rz));
         _v.set(pv[0], pv[1], pv[2]).applyMatrix4(_r);
         _r.setPosition(pv[0] - _v.x, pv[1] - _v.y, pv[2] - _v.z);
-        _o.multiplyMatrices(_m, _r);
-      } else _o.copy(_m);
-      set.meshes[pi].setMatrixAt(ag.li, _o);
+      } else _r.identity();
+      // rows of the rig-space part matrix → 3 texels (the vertex shader rebuilds it, see material.js RIG_PARS)
+      const e = _r.elements, o = base + pi * 12;
+      D[o] = e[0]; D[o + 1] = e[4]; D[o + 2] = e[8]; D[o + 3] = e[12];
+      D[o + 4] = e[1]; D[o + 5] = e[5]; D[o + 6] = e[9]; D[o + 7] = e[13];
+      D[o + 8] = e[2]; D[o + 9] = e[6]; D[o + 10] = e[10]; D[o + 11] = e[14];
     }
     if (this.blob) {
       const w = Math.max(r.size[0], r.size[2] * 0.7) * ag.scale * 0.75;
@@ -458,11 +473,31 @@ export class Actors {
 
   dispose() {
     this.object.removeFromParent();
-    for (const s of this.sets) { for (const m of s.meshes) m.geometry.dispose(); s.mat.dispose(); s.depth.dispose(); }
+    for (const s of this.sets) { s.mesh.geometry.dispose(); s.mat.dispose(); s.depth.dispose(); s.rigTex.dispose(); }
     if (this.blob) { this.blob.geometry.dispose(); this.blob.material.dispose(); }
     const list = this.stage.actorSystems;
     if (list) list.splice(list.indexOf(this), 1);
   }
+}
+
+// all parts of a rig → one geometry with a per-vertex part index (aPart)
+function mergeParts(rg) {
+  const arrs = rg.parts.map((p) => buildMesh(p.grid, rg.palette, { greedy: true, arrays: true }).solid);
+  let nv = 0, ni = 0;
+  for (const a of arrs) if (a) { nv += a.pos.length / 4; ni += a.index.length; }
+  const pos = new Int16Array(nv * 4), info = new Uint8Array(nv * 4), edge = new Uint8Array(nv * 4), part = new Uint8Array(nv);
+  const index = nv > 65535 ? new Uint32Array(ni) : new Uint16Array(ni);
+  let v = 0, k = 0;
+  arrs.forEach((a, pi) => {
+    if (!a) return;
+    const n = a.pos.length / 4;
+    pos.set(a.pos, v * 4); info.set(a.info, v * 4); edge.set(a.edge, v * 4); part.fill(pi, v, v + n);
+    for (let i = 0; i < a.index.length; i++) index[k + i] = a.index[i] + v;
+    v += n; k += a.index.length;
+  });
+  const geo = geometryFromArrays({ pos, info, edge, index, light: null });
+  geo.setAttribute('aPart', new THREE.BufferAttribute(part, 1));
+  return geo;
 }
 
 // soft contact shadow blob (cheap alternative to shadow-map shadows)

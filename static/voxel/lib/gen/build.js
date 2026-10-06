@@ -15,6 +15,8 @@ export const BUILD = {
   plankLight: { color: '#c79a62', jitter: 0.05 },
   beam: { color: '#5a3a22', jitter: 0.05 },
   plaster: { color: '#efe4cf', jitter: 0.03 },
+  awningRed: { color: '#c8503e', jitter: 0.04 }, awningCream: { color: '#efe2c4', jitter: 0.03 }, awningBlue: { color: '#4a78b0', jitter: 0.04 },
+  awningGreen: { color: '#5c9a5e', jitter: 0.04 }, awningYellow: { color: '#e8b347', jitter: 0.04 },
   brick: { color: '#a8513a', jitter: 0.1, grid: 0.5 },
   stoneBrick: { color: '#8f8a84', jitter: 0.1, grid: 0.55 },
   cobble: { colors: ['#7e7a74', '#8f8b84', '#6d6a64'], jitter: 0.06, grid: 0.3 },
@@ -94,7 +96,9 @@ export function opening(g, lo, hi, op) {
  *   w, d, h (wall height), wall, posts, beam, base, floor, roof, roofType ('gable'|'hip'|'shed'|'flat'), overhang, slope,
  *   gable (id for the gable triangles, defaults to wall), door { side, at, w, h, m }, windows (count per long side) | [{ side, at, y, w, h }],
  *   window (fill id, 'window'), windowFrame, lit (0..1 chance a window glows with 'windowLit'), chimney (true | { at: [dx, dz], m, h }), seed
- * Returns the roof's ridge height.
+ * Returns { ridge (roof top y), chimneyTop ([x, y, z] above the chimney, for smoke) }. The roof overhangs the
+ * footprint by `overhang` (1) on every side — keep that inside a region box. The default door is 3 tall
+ * (people are diorama-scaled ~7): pass door: { h: 5 } and h ≥ 7 for people-scale doors.
  */
 export function house(g, p, o = {}) {
   const R = R_(o);
@@ -257,10 +261,15 @@ export function crate(g, p, o = {}) {
   return g;
 }
 
-/** Barrel: banded cylinder. opts: height (3), radius (1.2), m, band */
+/** Barrel: cylinder with metal hoops and a wooden lid. opts: height (3), radius (1.2; 1.6+ for a fat 3×3 cask), m, band, lid */
 export function barrel(g, p, o = {}) {
-  const h = o.height ?? 3;
-  g.cylinder(p, o.radius ?? 1.2, h, (x, y) => (y === p[1] || y === p[1] + h - 1 || y === p[1] + Math.floor(h / 2) ? o.band ?? 'metalDark' : o.m ?? 'plank'));
+  const h = o.height ?? 3, r = o.radius ?? 1.2;
+  const bands = h >= 4 ? [1, h - 2] : [Math.floor(h / 2)];
+  // metal hoops only on the outside ring; wooden lid on top (a dark top reads as a hole from above)
+  g.cylinder(p, r, h, (x, y, z) => {
+    const dy = y - p[1], rim = Math.hypot(x - p[0], z - p[2]) > r - 1.05;
+    return dy === h - 1 ? o.lid ?? 'plankDark' : rim && bands.includes(dy) ? o.band ?? 'metalDark' : o.m ?? 'plank';
+  });
   return g;
 }
 
@@ -385,6 +394,63 @@ export function person(g, p, o = {}) {
   return g;
 }
 
+const STALL_GOODS = {
+  fruit: ['#d8402e', '#ec8a2a', '#f1d44a', '#6e3a82'], veg: ['#93c463', '#e3712a', '#dd7a22', '#6a9a3a'],
+  fish: ['#a9bccb', '#8fa6b8', '#c2d0da'], bread: ['#c98d48', '#b97a38', '#e0b070'],
+  flowers: ['#d8402e', '#f2d040', '#f08ab0', '#9a6ad0', '#f4f2ee'], cloth: ['#c94a4a', '#4a7ac9', '#8a5ab0', '#5f9a62', '#efe2c4'],
+  pots: ['#b8623c', '#9a4e2e', '#d8a070'],
+};
+
+/**
+ * Market stall facing `side`: counter with goods, striped awning on 4 posts, a vendor behind, display crates
+ * in front. p = [x, y, z] front-centre cell of the counter (y = floor level); the stall extends `d` back.
+ * opts: w (7, odd), d (4), awning ([stripeA, stripeB] ids, ['awningRed', 'awningCream']), goods ('fruit' | 'veg' |
+ * 'fish' | 'bread' | 'flowers' | 'cloth' | 'pots' | [colors] | fn({ top, at, W, w, d, R }) | false), crates (true),
+ * vendor (true), post, counter, seed. Awning top is 8 above p.y (walk-under height for people: put walk areas in front).
+ * Returns { front: [x, z] } (the cell in front of the counter).
+ */
+export function stall(g, p, side = '+z', o = {}) {
+  const R = R_(o), P = g.palette;
+  const [fx, fz] = SIDES[side], ax = fz !== 0 ? 1 : 0, az = fx !== 0 ? 1 : 0;
+  const w = o.w ?? 7, d = o.d ?? 4, h = (w - 1) >> 1, y0 = p[1];
+  const W = (u, v) => [p[0] + ax * (u - h) - fx * v, p[2] + az * (u - h) - fz * v];
+  const at = (u, y, v, m) => { const [x, z] = W(u, v); g.put(x, y0 + y, z, m, o.mode); };
+  const post = o.post ?? 'beam', ctr = o.counter ?? 'plankDark';
+  for (let u = 0; u < w; u++) { at(u, 0, 0, ctr); at(u, 1, 0, ctr); at(u, 2, 0, o.counterTop ?? 'plankLight'); }
+  for (let u = 1; u < w - 1; u++) { at(u, 0, d - 1, 'plank'); at(u, 1, d - 1, 'plank'); }
+  for (const u of [0, w - 1]) for (const v of [0, d - 1]) for (let y = 0; y <= (v === 0 ? 6 : 7); y++) at(u, y, v, post);
+  const [A, B] = o.awning ?? ['awningRed', 'awningCream'];
+  for (let u = 0; u < w; u++) {
+    const m = u % 2 ? B : A;
+    for (let v = -1; v < d; v++) at(u, v >= (d >> 1) ? 8 : 7, v, m);
+    at(u, 6, -1, m);
+    if (u % 2 === 0) at(u, 5, -1, m);
+  }
+  if (o.vendor !== false) {
+    const [px, pz] = W(h, 1), [qx, qz] = W(h - 1, 1); // person() is 2 wide: start at the lower cell
+    person(g, [Math.min(px, qx), y0, Math.min(pz, qz)], { side, seed: R.int(0, 1e6) });
+  }
+  const top = (u, y, m) => at(u, y, 0, m);
+  const goods = o.goods ?? 'fruit';
+  if (typeof goods === 'function') goods({ top, at, W, w, d, R, g });
+  else if (goods) {
+    const cols = (Array.isArray(goods) ? goods : STALL_GOODS[goods] ?? STALL_GOODS.fruit).map((c) => P.color(c));
+    const ice = goods === 'fish' ? P.color('#e3f3f7') : 0;
+    for (let u = 1; u < w - 1; u++) {
+      const m = cols[Math.floor((u - 1) / 2) % cols.length];
+      if (ice) { top(u, 3, ice); if (u % 2) top(u, 4, m); } else { top(u, 3, m); if (u % 2) top(u, 4, m); }
+    }
+    if (o.crates !== false) for (let u = 0, k = 0; u + 1 < w; u += 3, k++) {
+      const [ax0, az0] = W(u, -2), [bx, bz] = W(u + 1, -3);
+      const x = Math.min(ax0, bx), z = Math.min(az0, bz);
+      g.box([x, y0, z], [x + 1, y0, z + 1], 'plank', { mode: o.mode });
+      g.box([x, y0 + 1, z], [x + 1, y0 + 1, z + 1], cols[(k + 1) % cols.length], { mode: o.mode });
+      g.put(x + (k & 1), y0 + 2, z + ((k >> 1) & 1), cols[(k + 1) % cols.length], o.mode);
+    }
+  }
+  return { front: W(h, -1) };
+}
+
 /** Campfire: stone ring, crossed logs, flames. Returns the fire's top [x,y,z] (for an embers particle box). opts: stone, log, fire, radius */
 export function campfire(g, p, o = {}) {
   const r = o.radius ?? 2;
@@ -458,8 +524,11 @@ export function bridge(g, a, b, o = {}) {
 
 /**
  * Boat / ship hull along +x from p (keel at p.y, stern at p.x, bow at p.x + length). Clears its interior, so it
- * can be placed into water already in the grid (put the keel ~1–2 below the water surface).
- * opts: length (14), width (6, odd is best), height (3), hull, hullTop (stripe id), deck, cabin ({ at, w, h, m, roof, windows }), mast (height)
+ * can be placed into water already in the grid. Rows: keel y = p.y, deck y = p.y + height − 2, rim (hullTop)
+ * y = p.y + height − 1 — so height ≥ 3 and width ≥ 5 for a visible deck (smaller is a solid hull). Freeboard:
+ * keel ~(height − 1) below the water surface puts the deck at water level (keel −2, height 4 → deck at a y = 0 quay).
+ * opts: length (14), width (6, odd is best), height (3), hull, hullTop (stripe id), deck,
+ *       cabin ({ at (offset from stern), w, h, m, roof, windows }), mast (height), mastAt (offset from stern, 0.55·length), mastM
  */
 export function boat(g, p, o = {}) {
   const L = o.length ?? 14, W = o.width ?? 6, H = o.height ?? 3;
@@ -488,7 +557,8 @@ export function boat(g, p, o = {}) {
     g.box([cx - 1, p[1] + H + ch - 1, p[2] - hz - 1], [cx + cw, p[1] + H + ch - 1, p[2] + hz + 1], c.roof ?? 'plankDark');
     if (c.windows !== false) for (let x = cx + 1; x < cx + cw - 1; x += 2) { g.set(x, p[1] + H, p[2] + hz, g.mat(c.window ?? 'window')); g.set(x, p[1] + H, p[2] - hz, g.mat(c.window ?? 'window')); }
   }
-  if (o.mast) g.box([p[0] + Math.round(L * 0.55), p[1] + H - 1, p[2]], [p[0] + Math.round(L * 0.55), p[1] + H + o.mast, p[2]], o.mastM ?? 'beam');
+  const mx = p[0] + (o.mastAt ?? Math.round(L * 0.55));
+  if (o.mast) g.box([mx, p[1] + H - 2, p[2]], [mx, p[1] + H + o.mast, p[2]], o.mastM ?? 'beam');
   return g;
 }
 
@@ -526,6 +596,7 @@ B_(bookshelf, 'bookshelf with random books', (g) => bookshelf(g, [-2, 1, 0], { s
 B_(fireplace, 'fireplace with fire + chimney', (g) => fireplace(g, [-2, 1, -2]));
 B_(bricks, 'brick/stone courses (or paving)', (g) => bricks(g, [-6, 1, 0], [6, 7, 1]));
 B_(person, 'tiny static person (stand | wave | sit) — animated: creature walker', (g) => { person(g, [-3, 1, 0], { seed: 3, pose: 'wave' }); person(g, [2, 1, 0], { seed: 4 }); });
+B_(stall, 'market stall: striped awning, goods, vendor, crates', (g) => stall(g, [0, 1, 2], '+z', { goods: 'fruit', seed: 3 }));
 B_(campfire, 'campfire (returns the fire top for embers)', (g) => campfire(g, [0, 1, 0]));
 B_(bench, 'park bench', (g) => bench(g, [-1, 1, 0]));
 B_(signpost, 'signpost with pixel text', (g) => signpost(g, [0, 1, 0], { text: 'HI' }));

@@ -1,6 +1,6 @@
 // Orchard (lead's region): grass, the road, rows of apple trees, a hay field, a farmhouse, sheep.
 import { tile, house, fence, trail } from '../../../lib/index.js';
-import { ROAD, Z0, Z1 } from '../layout.js';
+import { ROAD, Z0, Z1, LIFE } from '../layout.js';
 export default function build(g, ctx) {
   const { x0, x1 } = ctx.options, R = ctx.rng;
   tile(g, [x0, Z0], [x1, Z1], { depth: 6, seed: 3 });
@@ -12,5 +12,5 @@ export default function build(g, ctx) {
   const pen = [[x0 + 48, 1, ROAD.z1 + 6], [x1 - 3, 1, ROAD.z1 + 6], [x1 - 3, 1, Z1 - 3], [x0 + 48, 1, Z1 - 3], [x0 + 48, 1, ROAD.z1 + 6]];
   fence(g, pen);
   ctx.emit('actors', { creature: 'sheep', count: 5, area: [[x0 + 50, ROAD.z1 + 8], [x1 - 5, Z1 - 5]] });
-  ctx.emit('actors', { creature: 'walker', count: 3, variants: 3, area: [[x0 + 2, ROAD.z0], [x1, ROAD.z1]] });
+  ctx.emit('actors', { ...LIFE.walker, count: 3, area: [[x0 + 2, ROAD.z0], [x1, ROAD.z1]] });
 }
