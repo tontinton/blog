@@ -63,6 +63,22 @@ flat varying vec3 vTU;
 flat varying vec3 vTV;
 `;
 
+// Rigged instancing (actors): every vertex carries its part index; per instance, each part's rig-space
+// matrix (3×4 rows) lives in a float texture → a whole multi-part creature is ONE instanced draw call.
+const RIG_PARS = /* glsl */ `
+#ifdef VOXEL_RIG
+attribute float aPart;
+uniform highp sampler2D uRig;
+uniform int uRigStride;
+vec4 vxRigTexel(int i) { return texelFetch(uRig, ivec2(i % 1024, i / 1024), 0); }
+mat4 vxRigMatrix() {
+  int i = gl_InstanceID * uRigStride + int(aPart + 0.5) * 3;
+  vec4 a = vxRigTexel(i), b = vxRigTexel(i + 1), c = vxRigTexel(i + 2);
+  return mat4(a.x, b.x, c.x, 0.0, a.y, b.y, c.y, 0.0, a.z, b.z, c.z, 0.0, a.w, b.w, c.w, 1.0);
+}
+#endif
+`;
+
 // shared by the color and depth materials: decode + sway
 const VERT_BEGIN = /* glsl */ `
 int fbits = int(aFace + 0.5);
@@ -71,9 +87,16 @@ int mid = int(aInfo.x + 0.5) + int(aInfo.y + 0.5) * 256;
 vec3 objectNormal = dirNormal(fdir);
 vec4 m1v = matT(mid, 1);
 vec4 mcv = matT(mid, 12);
+#ifdef VOXEL_RIG
+mat4 vxRig = vxRigMatrix();
+objectNormal = mat3(vxRig) * objectNormal;
+#endif
 `;
 const VERT_SWAY = /* glsl */ `
 vec3 transformed = vec3(position);
+#ifdef VOXEL_RIG
+transformed = (vxRig * vec4(transformed, 1.0)).xyz;
+#endif
 if (m1v.w > 0.0 && uWind.z > 0.0) {
   vec4 wp = modelMatrix * vec4(transformed, 1.0);
   #ifdef USE_INSTANCING
@@ -272,6 +295,9 @@ vObj = position;
 vEdge = aEdge;
 vOcc = vec2(aInfo.z / 255.0, aInfo.w / 255.0);
 vec3 tU = dirU(fdir), tV = dirV(fdir);
+#ifdef VOXEL_RIG
+tU = mat3(vxRig) * tU; tV = mat3(vxRig) * tV;
+#endif
 #ifdef USE_INSTANCING
 tU = mat3(instanceMatrix) * tU; tV = mat3(instanceMatrix) * tV;
 #endif
@@ -289,6 +315,7 @@ vVLight = aLight.rgb;
  *   transparent  water/glass pass (MeshPhysical + transmission)
  *   transmission true → refraction (renders an extra opaque pass); false → alpha blend
  *   hooks      GLSL injections (see top of file)
+ *   rig        true for rigged instanced geometry (aPart + uRig/uRigStride uniforms, see actors.js)
  */
 export function createVoxelMaterial(opts) {
   const { uniforms, light, transparent, hooks } = opts;
@@ -300,10 +327,11 @@ export function createVoxelMaterial(opts) {
   mat.defines = { ...(mat.defines ?? {}), VOXEL: 1 };
   if (light) mat.defines.VOXEL_LIGHT = 1;
   if (transparent) mat.defines.VOXEL_WATER = 1;
+  if (opts.rig) mat.defines.VOXEL_RIG = 1;
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', `#include <common>\n${VERT_PARS}`)
+      .replace('#include <common>', `#include <common>\n${VERT_PARS}\n${RIG_PARS}`)
       .replace('#include <beginnormal_vertex>', VERT_BEGIN)
       .replace('#include <begin_vertex>', `${VERT_SWAY}\n/*VOXEL_VERTEX_HOOK*/`)
       .replace('#include <fog_vertex>', `#include <fog_vertex>\n${VERT_MAIN_TAIL}`);
@@ -331,7 +359,7 @@ export function createVoxelMaterial(opts) {
     mat.userData.shader = shader;
   };
   const hk = hookKey(hooks);
-  mat.customProgramCacheKey = () => `voxel-${transparent ? (transmission ? 't' : 'a') : 's'}-${light ? 1 : 0}-${hk}`;
+  mat.customProgramCacheKey = () => `voxel-${transparent ? (transmission ? 't' : 'a') : 's'}-${light ? 1 : 0}-${opts.rig ? 'r' : ''}-${hk}`;
   return mat;
 }
 
@@ -342,10 +370,11 @@ export function createVoxelMaterial(opts) {
 export function createVoxelDepthMaterial(opts) {
   const { uniforms, hooks } = opts;
   const mat = opts.distance ? new THREE.MeshDistanceMaterial() : new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+  if (opts.rig) mat.defines = { ...(mat.defines ?? {}), VOXEL_RIG: 1 };
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', `#include <common>\n${GLSL_COMMON}\nattribute float aFace;\nattribute vec4 aInfo;\nuniform vec4 uWind;\nflat varying int vMid;`)
+      .replace('#include <common>', `#include <common>\n${GLSL_COMMON}\n${RIG_PARS}\nattribute float aFace;\nattribute vec4 aInfo;\nuniform vec4 uWind;\nflat varying int vMid;`)
       .replace('#include <begin_vertex>', `${VERT_BEGIN}\n${VERT_SWAY}\n/*VOXEL_VERTEX_HOOK*/\nvMid = mid;`);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>\n${GLSL_COMMON}\nflat varying int vMid;`)
@@ -355,6 +384,6 @@ export function createVoxelDepthMaterial(opts) {
     shader.vertexShader = shader.vertexShader.replace('/*VOXEL_VERTEX_HOOK*/', hooks?.vertex ?? '');
   };
   const hk = hookKey(hooks);
-  mat.customProgramCacheKey = () => `voxel-${opts.distance ? 'distance' : 'depth'}-${hk}`;
+  mat.customProgramCacheKey = () => `voxel-${opts.distance ? 'distance' : 'depth'}-${opts.rig ? 'r' : ''}-${hk}`;
   return mat;
 }

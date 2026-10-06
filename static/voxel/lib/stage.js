@@ -26,6 +26,7 @@ import './gen/creatures.js'; // registers the built-in creatures
 import { createUI } from './ui.js';
 
 const DEG = Math.PI / 180;
+const stableKey = (v) => JSON.stringify(v, (k, x) => (x && typeof x === 'object' && !Array.isArray(x) ? Object.fromEntries(Object.entries(x).sort(([a], [b]) => (a < b ? -1 : 1))) : x));
 const params = new URLSearchParams(typeof location !== 'undefined' ? location.search : '');
 
 patchShadowChunk();
@@ -206,16 +207,16 @@ export class Stage {
         if (instances.has(name)) assets[name] = await this.addAsync(ag, { bake: spec.assetBake ?? { ao: true }, palette: P, name, workers: pool ? undefined : 0, instances: instances.get(name), cluster: 0 });
       }
     }
-    // extras: particles, lights, actors, props, custom. Actors that differ only in area/path/count/seed (e.g.
-    // walkers emitted by every district) merge into one system: one draw call per part for all of them.
+    // extras: particles, lights, actors, props, custom. Actors that differ only in area/path/center/radius/
+    // count/seed (e.g. walkers emitted by every district) merge into one system: one draw call per variant.
     const merged = new Map();
     for (const e of extras) {
-      if (e.kind !== 'actors' || !(e.data.area || e.data.path)) continue;
-      const { area, path, count, seed, ...rest } = e.data;
-      const key = JSON.stringify(rest);
+      if (e.kind !== 'actors' || !(e.data.area || e.data.path || e.data.center)) continue;
+      const { area, path, center, radius, count, seed, ...rest } = e.data;
+      const key = stableKey(rest); // key order doesn't matter
       if (!merged.has(key)) { merged.set(key, { ...rest, seed, groups: [] }); e.merged = merged.get(key); }
       else e.skip = true;
-      merged.get(key).groups.push({ area, path, count: count ?? 1 });
+      merged.get(key).groups.push({ area, path, center, radius, count: count ?? 1 });
     }
     for (const e of extras) {
       if (e.skip) continue;

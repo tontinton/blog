@@ -165,6 +165,9 @@ const stage = new Stage({
 | `uniforms` | shared voxel uniforms: `uTime, uWind, uAO, uBevel, uLook, uWater, uSeed` (see material.js) |
 | `look`, `bounds` (Box3), `radius`, `time`, `fixedTime` (frozen clock or null) | |
 
+Camera orientation: at the default yaw (45°; most pieces use 35–40°) the camera looks from **+x, +z**
+toward the origin — the +z/+x sides of a scene are the front; tall things belong at −z/−x.
+
 URL params every piece understands: `?debug` (tweak panel + stats overlay), `?look=name`,
 `?lookjson={…}`, `?t=seconds`, `?yaw= &pitch= &zoom=`, `?target=x,y,z` (close-ups), `?dpr=`, `?region=a,b`
 (world: build only those), `?shot` (used by shot.mjs).
@@ -193,11 +196,12 @@ P.add('rune', { color: '#335', custom: [2, 0, 0, 0] });   // mc.x = 2 for rune v
 
 ## Actors (`actors.js`, creatures in `gen/creatures.js`)
 
-Full guide: [animation.md](animation.md). `stage.actors(opts)` → `Actors` with `.agents` (live
+Full guide: [animation.md](animation.md). One draw call per creature variant (rigged instancing:
+`createVoxelMaterial({ rig: true })` reads per-part matrices from `uRig`). `stage.actors(opts)` → `Actors` with `.agents` (live
 `{ x, y, z, heading, speed, state }`), `.object`, `.ground` (`at(x,z)`, `ok(x,z)`, `region(x,z)`), `.dispose()`.
 Options: `creature` (name \| rig \| factory), `options` (creature opts or array = variants), `variants`, `count`,
 `behavior` (`'wander' 'path' 'follow' 'circle' 'flock' 'still'` \| `(ag, dt, t, actors) => {}`), `area`,
-`groups: [{ area \| path, count }]`, `path`, `loop`, `spread`, `center`, `radius`, `altitude`, `target`,
+`groups: [{ area \| path \| center + radius, count }]`, `path`, `loop`, `spread`, `center`, `radius`, `altitude`, `target`,
 `spacing`, `ground` (`'auto'` \| grid \| group \| y), `on` (`'ground'` \| `'water'`), `maxStep`, `region`,
 `speed`, `scale`, `tints`, `idle`, `sprint`, `shadow` (`'auto'` \| true \| `'blob'` \| false), `seed`.
 
@@ -248,7 +252,7 @@ All accept `seed` (or `R`, an rng) and material overrides. Foliage uses `mode: '
 · `cover(g, { on, with, amount, scale, depth })` — noisy moss/snow/ivy on top faces
 · `vines(g, { on, with, density, length })` — strands hanging down walls
 
-**terrain.js** — `tile(g, [x0,z0], [x1,z1], { y: 0, depth: 6, top, topDepth, layers: [[id, thickness], …], hills, corner, edge, lip })`
+**terrain.js** — `tile(g, [x0,z0], [x1,z1], { y: 0, depth: 6, top, topDepth, layers: [[id, thickness], …], hills, corner, edge, lip })` (fills y − depth + 1 … y)
 · `terrain(g, a, b, { base, height, scale, octaves, ridged, top, layers, steep, sand, water, waterLevel, snow, snowLine })`
 · `island(g, center, { radius, depth, relief, shape: 'round'|'square', top, layers, under })` (floating island)
 · `pond(g, [x, z], { radius, depth, water, shore, bed, level })` · `river(g, [[x,z], …], { width, depth })`
@@ -262,8 +266,11 @@ All accept `seed` (or `R`, an rng) and material overrides. Foliage uses `mode: '
 · `bricks(g, a, b, { size: [3,2], stones, mortar, axis, stagger })` (big stones + mortar; `axis: 'y'` = floor planks/paving)
 · props: `crate`, `barrel`, `table`, `chair`, `bed`, `bookshelf`, `fireplace(g, p, side, { w, h, stone, fire })`,
   `bench(g, p, side, { length })`, `signpost(g, p, { text })`, `lantern(g, ceilingPoint, { drop })`, `campfire(g, p)` → fire top
-· `person(g, p, { side, pose: 'stand'|'wave'|'sit', height: 7|8, skin, shirt, pants, hair, hat, seed })` — tiny ~7-voxel people (random colors per seed)
-· `bridge(g, a, b, { width, arch, deck, rail, post })` · `boat(g, keelStern, { length, width, height, hull, hullTop, deck, cabin, mast })` (clears its interior — drop it into water)
+· `person(g, p, { side, pose: 'stand'|'wave'|'sit', height: 7|8, skin, shirt, pants, hair, hat, seed })` — tiny ~7-voxel people (random colors per seed);
+  2 wide across its facing, `p` = the lower across-axis cell; `pose: 'sit'` at a `bench`'s `p` sits on it.
+  `house` windows `[{ side, at, y }]`: `at` = offset along the wall from its start corner, `y` = above the floor
+· `bridge(g, a, b, { width, arch, deck, rail, post })` · `boat(g, keelStern, { length, width, height, hull, hullTop, deck, cabin, mast, mastAt })` (clears its interior — drop it into water; keel y, deck y + height − 2, rim y + height − 1: height ≥ 3, width ≥ 5 for a deck)
+· `stall(g, frontCentre, side, { w, d, awning: [a, b], goods: 'fruit'|'veg'|'fish'|'bread'|'flowers'|'cloth'|'pots'|[colors]|fn, crates, vendor })` → `{ front }` (market stall)
 · `car(g, p, { color, axis, glass, wheel, light })`
 · (all registered with examples — `?scene=catalog` in the lab shows each one)
 · nature.js also has `waterfall(g, top, bottomY, { width, depth, water, foam })` (pair with `stage.particles({ preset: 'mist', box })`)

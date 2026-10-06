@@ -292,12 +292,16 @@ test('heightField: tufts and high canopies are see-through, bushes block, water 
   const g = new VoxelGrid(Q);
   g.box([0, 0, 0], [20, 0, 20], 'grass');
   g.set(2, 1, 2, 'leaf');                                  // 1-voxel tuft
-  g.box([5, 1, 5], [6, 2, 6], 'leaf');                     // bush (2 tall, on the ground)
+  g.box([5, 1, 5], [6, 3, 6], 'leaf');                     // bush (3 tall, on the ground)
   g.box([10, 8, 10], [12, 9, 12], 'leaf');                 // canopy high above
   g.box([15, 0, 15], [16, 0, 16], 'water');
+  g.box([2, 6, 15], [8, 6, 15], 'stone');                  // a stone arch/awning (not swaying) with headroom
+  g.box([2, 1, 18], [3, 2, 18], 'stone');                  // a low wall: obstacle
   const hf = V.heightField([{ grid: g, off: [0, 0, 0] }], [[0, 0], [20, 20]], 'ground', 4);
+  assert.equal(hf.at(5, 15.5), 1, 'under the arch');
+  assert.equal(hf.at(2.5, 18.5), 3, 'wall');
   assert.equal(hf.at(2.5, 2.5), 1, 'tuft');
-  assert.equal(hf.at(5.5, 5.5), 3, 'bush');
+  assert.equal(hf.at(5.5, 5.5), 4, 'bush');
   assert.equal(hf.at(11, 11), 1, 'under canopy');
   assert.ok(!hf.ok(15.5, 15.5) && hf.ok(1, 1), 'water is not ground');
   const wf = V.heightField([{ grid: g, off: [0, 0, 0] }], [[0, 0], [20, 20]], 'water');

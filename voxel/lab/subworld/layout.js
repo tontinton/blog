@@ -11,3 +11,11 @@ export const REGIONS = [
   { name: 'market', x0: -32, x1: 31 },
   { name: 'docks', x0: 32, x1: 95 },
 ].map((r) => ({ ...r, box: [[r.x0, -8, Z0], [r.x1, 60, Z1]] }));
+// Shared actor specs: emits that differ only in area/path/center/radius/count/seed merge into ONE system
+// (one draw call per variant for the whole world), so every region spreads these: { ...LIFE.walker, count, area }.
+export const LIFE = {
+  walker: { creature: 'walker', variants: 3 },
+  cat: { creature: 'cat', variants: 2 },
+  dog: { creature: 'dog' },
+  gulls: { creature: 'bird', behavior: 'circle' },
+};
