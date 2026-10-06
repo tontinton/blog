@@ -104,7 +104,9 @@ export class Stage {
   /**
    * Mesh a VoxelGrid and add it. Returns a THREE.Group (move/rotate/animate it freely).
    * opts: palette, position [x,y,z], rotation (deg around Y) | [x,y,z] deg, scale,
-   *       center ('bottom' | 'center' | false) — where the group origin sits in the grid; pivot [x,y,z] (grid coords) overrides it,
+   *       center (false) — by default grid coords ARE world coords (particles boxes, lights, picks all line up).
+   *               'bottom' | 'center' moves the group origin to the grid's bottom-center / center (handy for turntables);
+   *       pivot [x,y,z] (grid coords) — group origin at this voxel (rotate a windmill blade around its hub),
    *       instances [[x, y, z, rotYdeg?, scale?] | { position, rotation, scale }] — draw many copies in one call,
    *       bake { ao: true | { radius, rays }, light: true }, ao (vertex AO, true), greedy (true),
    *       hooks (custom GLSL, see material.js), shadow (cast, true), receive (true), fit (include in camera fit, true),
@@ -137,8 +139,8 @@ export class Stage {
     const light = !!res.solid?.attributes.aLight || !!res.transparent?.attributes.aLight;
     const b = grid.bounds();
     if (opts.pivot) inner.position.set(-opts.pivot[0], -opts.pivot[1], -opts.pivot[2]);
-    else if (b && opts.center !== false) {
-      const c = opts.center ?? 'bottom';
+    else if (b && opts.center) {
+      const c = opts.center;
       inner.position.set(-(b.min[0] + b.size[0] / 2), c === 'center' ? -(b.min[1] + b.size[1] / 2) : -b.min[1], -(b.min[2] + b.size[2] / 2));
     } else inner.position.set(0, 0, 0);
     const inst = opts.instances?.map(instanceMatrix);
@@ -262,7 +264,7 @@ export class Stage {
     u.uBevel.value.set(v.bevel, v.bevelStrength, v.edge, v.gridLine);
     u.uLook.value.set(v.emissive, v.bakedLight, v.jitter, v.saturation);
     u.uWind.value.set(L.wind.direction[0], L.wind.direction[1], L.wind.strength, L.wind.speed);
-    u.uWater.value.set(L.water.scale, L.water.speed, L.water.strength, 0);
+    u.uWater.value.set(L.water.scale, L.water.speed, L.water.strength, L.water.glow);
     setLin(this.sun.color, L.sun.color); this.sun.intensity = L.sun.intensity;
     this.sun.castShadow = !!L.sun.shadow;
     this.sun.shadow.mapSize.set(L.sun.mapSize, L.sun.mapSize);
@@ -502,6 +504,18 @@ export class Stage {
     for (const fn of this.updaters) fn(t, dt);
     this._render(t);
     this.ui?.frame(dt);
+    this._adapt(dt);
+  }
+
+  // Drop the render resolution in 0.25 steps (never below 1, or 0.75 on 1x screens) when frames are slow.
+  _adapt(dt) {
+    if (this.shot || this.opts.adaptive === false || params.has('dpr')) return;
+    this._ft = (this._ft ?? []); this._ft.push(dt);
+    if (this._ft.length < 90) return;
+    const avg = this._ft.reduce((a, b) => a + b, 0) / this._ft.length;
+    this._ft = [];
+    const floor = this.maxDpr > 1 ? 1 : 0.75;
+    if (avg > 1 / 38 && this.dpr > floor) { this.dpr = Math.max(floor, this.dpr - 0.25); this.resize(); }
   }
 
   _render(t) {

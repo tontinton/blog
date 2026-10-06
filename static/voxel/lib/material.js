@@ -91,7 +91,7 @@ ${GLSL_COMMON}
 uniform vec4 uAO;     // vertex AO strength, ray AO strength, AO on direct light, AO gamma
 uniform vec4 uBevel;  // width (voxels), normal strength, edge lighten(+)/darken(-), grid line width
 uniform vec4 uLook;   // emissive mult, baked light mult, jitter mult, saturation
-uniform vec4 uWater;  // ripple scale, ripple speed, ripple strength, -
+uniform vec4 uWater;  // ripple scale, ripple speed, ripple strength, scattering glow
 uniform float uSeed;
 flat varying int vMid;
 flat varying int vFace;
@@ -203,6 +203,9 @@ if (m1.z > 0.0) {
   }
   emis = m2.rgb * m1.z * fl * uLook.x * (1.0 + (h - 0.5) * 2.0 * jit);
 }
+#ifdef VOXEL_WATER
+if (m0.w > 0.5 && m0.w < 1.5) emis += m0.rgb * uWater.w * (1.0 - 0.5 * matT(mid, 11).x); // in-scattering: water keeps its color in shade
+#endif
 /*VOXEL_EMISSIVE_HOOK*/
 totalEmissiveRadiance += emis;
 `;
@@ -233,7 +236,7 @@ export function createVoxelUniforms(palette) {
     uAO: { value: new THREE.Vector4(0.75, 0.8, 0.35, 1) },
     uBevel: { value: new THREE.Vector4(0.12, 0.6, 0.06, 0.035) },
     uLook: { value: new THREE.Vector4(1, 1, 1, 1) },
-    uWater: { value: new THREE.Vector4(0.9, 1, 1, 0) },
+    uWater: { value: new THREE.Vector4(0.9, 1, 1, 0.25) },
   };
 }
 

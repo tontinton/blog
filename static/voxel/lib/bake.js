@@ -115,7 +115,7 @@ function bakeLight(grid, palette, cls, opts) {
   grid.forEach((x, y, z, id) => {
     const L = lightOf[id];
     if (!L) return;
-    const k = `${L.key}|${L.intensity}|${L.radius}`;
+    const k = `${L.key}|${L.intensity}|${L.radius}|${L.falloff}`;
     let g = groups.get(k);
     if (!g) groups.set(k, (g = { L, src: [] }));
     g.src.push(x, y, z);
@@ -182,11 +182,11 @@ function bakeLight(grid, palette, cls, opts) {
       }
       buckets[v] = null;
     }
-    const c = g.L.color, I = g.L.intensity * scale;
+    const c = g.L.color, I = g.L.intensity * scale, fo = g.L.falloff;
     for (let i = 0; i < N; i++) {
       const l = level[i];
       if (!l) continue;
-      const f = l / R16, w = I * f * f;
+      const f = l / R16, w = I * (fo === 'linear' ? f : fo === 'quadratic' ? f * f : f * f * (3 - 2 * f));
       rgb[i * 3] += c[0] * w; rgb[i * 3 + 1] += c[1] * w; rgb[i * 3 + 2] += c[2] * w;
     }
   }

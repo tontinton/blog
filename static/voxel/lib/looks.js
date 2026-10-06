@@ -45,7 +45,7 @@ export const DEFAULT_LOOK = {
     bakedLight: 1,           // global multiplier on baked emissive light
   },
   wind: { strength: 1, speed: 1, direction: [1, 0.35] },
-  water: { scale: 0.9, speed: 1, strength: 1, transmission: true },
+  water: { scale: 0.9, speed: 1, strength: 1, glow: 0.25, transmission: true }, // glow: water keeps its color in shade
   exposure: 1,
   toneMapping: 'neutral',    // 'neutral' (keeps palette colors) | 'agx' (filmic, desaturates highlights) | 'aces' | 'reinhard' | 'cineon' | 'none'
   bloom: { enabled: true, strength: 0.35, radius: 0.85, threshold: 1.6, knee: 0.6, levels: 6, tint: '#ffffff' },
@@ -148,15 +148,16 @@ export const LOOKS = {
     ground: { opacity: 0.3, color: '#02030f', contact: 0.5 },
   },
 
-  /** cozy candle-lit interior (loft room): warm point light vibe, dark surround, glow. */
+  /** cozy lamp-lit interior (loft room): warm baked light everywhere, dark surround, glow, glossy floor. */
   cozy: {
-    background: { type: 'radial', colors: ['#2a2420', '#0d0a08'], center: [0.5, 0.5], radius: 0.85 },
-    sun: { color: '#9fb4ff', intensity: 0.45, azimuth: 200, elevation: 55, softness: 2 },
-    sky: { top: '#3a3550', horizon: '#3a2a20', bottom: '#120c08', intensity: 0.35, sunGlow: 0.1 },
-    voxel: { emissive: 1.2, bakedLight: 1.6, ao: 0.8, rayAO: 0.9, aoDirect: 0.4 },
-    exposure: 1.05,
+    background: { type: 'radial', colors: ['#2e2622', '#0d0a08'], center: [0.5, 0.5], radius: 0.85 },
+    sun: { color: '#ffe6c8', intensity: 0.9, azimuth: 25, elevation: 50, softness: 2.5 },
+    fill: { color: '#8fa8ff', intensity: 0.25, azimuth: 200, elevation: 40 },
+    sky: { top: '#5a5a80', horizon: '#5a4a48', bottom: '#20140c', intensity: 0.55, sunGlow: 0.1 },
+    voxel: { emissive: 1.2, bakedLight: 2.2, ao: 0.8, rayAO: 0.9, aoDirect: 0.4 },
+    exposure: 1.1,
     bloom: { strength: 0.45, radius: 0.8, threshold: 1.4 },
-    grade: { contrast: 1.1, saturation: 1.1, temperature: 0.2, lift: [0.02, 0.01, 0.0] },
+    grade: { contrast: 1.08, saturation: 1.05, temperature: 0.05, lift: [0.015, 0.01, 0.01] },
     vignette: { amount: 0.4, softness: 0.8 },
     ground: { opacity: 0.6, color: '#000000', contact: 0.6, reflect: 0.35, blur: 0.5 },
   },

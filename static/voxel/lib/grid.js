@@ -6,7 +6,7 @@
 //   g.box([0, 0, 0], [9, 0, 9], P.grass)  // all box ranges are INCLUSIVE
 //   g.fill([x0, y0, z0], [x1, y1, z1], (x, y, z) => id | 0)
 //   g.paint((x, y, z, id) => newId)      // recolor existing voxels
-//   g.stamp(other, x, y, z, { rot: 1, mode: 'keep' })
+//   g.stamp(other, x, y, z, { rot: 1, mode: 'keep' })   g.symmetrize('x')  (mirror half a character)
 //   g.forEach((x, y, z, id) => ...)  g.bounds()  g.count()  g.top(x, z)
 //
 // Shapes (sphere, cylinder, line, tube, roof, sdf, heightmap...) are added from shapes.js.
@@ -197,6 +197,23 @@ export class VoxelGrid {
     const g = new VoxelGrid(this.palette);
     this.forEach((x, y, z, id) => g.box([x * k, y * k, z * k], [x * k + k - 1, y * k + k - 1, z * k + k - 1], id));
     return g;
+  }
+
+  /**
+   * Mirror one half onto the other: model half a character, then g.symmetrize('x').
+   * axis 'x' | 'z'; c = mirror center (a voxel coordinate: odd-width models centered on voxel c;
+   * pass c = 0.5-offset like -0.5 to mirror between voxels for even widths); keep 'neg' | 'pos' = source side.
+   */
+  symmetrize(axis = 'x', c = 0, keep = 'neg') {
+    const ai = axis === 'x' ? 0 : 2, out = [];
+    this.forEach((x, y, z, id) => {
+      const p = [x, y, z], v = p[ai];
+      if (keep === 'neg' ? v > c : v < c) return;
+      p[ai] = Math.round(2 * c - v);
+      out.push(p[0], p[1], p[2], id);
+    });
+    for (let i = 0; i < out.length; i += 4) this.set(out[i], out[i + 1], out[i + 2], out[i + 3]);
+    return this;
   }
 
   /** New grid rotated by quarter turns around Y (about the origin). */
