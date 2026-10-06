@@ -36,28 +36,39 @@ class QuadBuffer {
     this.pos = g(this.pos, 16); this.info = g(this.info, 16); this.edge = g(this.edge, 16); this.flip = g(this.flip, 1);
     if (this.lt) this.lt = g(this.lt, 16);
   }
-  toGeometry() {
+  /** Plain typed arrays (structured-clone/transfer friendly — what workers send back). */
+  toArrays() {
     if (!this.n) return null;
     const nv = this.n * 4;
-    const geo = new THREE.BufferGeometry();
-    const ib = new THREE.InterleavedBuffer(this.pos.slice(0, nv * 4), 4);
-    geo.setAttribute('position', new THREE.InterleavedBufferAttribute(ib, 3, 0));
-    geo.setAttribute('aFace', new THREE.InterleavedBufferAttribute(ib, 1, 3));
-    geo.setAttribute('aInfo', new THREE.BufferAttribute(this.info.slice(0, nv * 4), 4));
-    geo.setAttribute('aEdge', new THREE.BufferAttribute(this.edge.slice(0, nv * 4), 4));
-    if (this.lt) geo.setAttribute('aLight', new THREE.BufferAttribute(this.lt.slice(0, nv * 4), 4, true));
-    const idx = nv > 65535 ? new Uint32Array(this.n * 6) : new Uint16Array(this.n * 6);
+    const index = nv > 65535 ? new Uint32Array(this.n * 6) : new Uint16Array(this.n * 6);
     for (let q = 0; q < this.n; q++) {
       const v = q * 4, i = q * 6;
-      if (this.flip[q]) { idx[i] = v + 1; idx[i + 1] = v + 2; idx[i + 2] = v + 3; idx[i + 3] = v + 1; idx[i + 4] = v + 3; idx[i + 5] = v; }
-      else { idx[i] = v; idx[i + 1] = v + 1; idx[i + 2] = v + 2; idx[i + 3] = v; idx[i + 4] = v + 2; idx[i + 5] = v + 3; }
+      if (this.flip[q]) { index[i] = v + 1; index[i + 1] = v + 2; index[i + 2] = v + 3; index[i + 3] = v + 1; index[i + 4] = v + 3; index[i + 5] = v; }
+      else { index[i] = v; index[i + 1] = v + 1; index[i + 2] = v + 2; index[i + 3] = v; index[i + 4] = v + 2; index[i + 5] = v + 3; }
     }
-    geo.setIndex(new THREE.BufferAttribute(idx, 1));
-    geo.computeBoundingBox();
-    geo.computeBoundingSphere();
-    return geo;
+    return { quads: this.n, pos: this.pos.slice(0, nv * 4), info: this.info.slice(0, nv * 4), edge: this.edge.slice(0, nv * 4), light: this.lt ? this.lt.slice(0, nv * 4) : null, index };
   }
+  toGeometry() { return geometryFromArrays(this.toArrays()); }
 }
+
+/** Arrays from toArrays() (or a worker) → BufferGeometry for the voxel material. */
+export function geometryFromArrays(a) {
+  if (!a) return null;
+  const geo = new THREE.BufferGeometry();
+  const ib = new THREE.InterleavedBuffer(a.pos, 4);
+  geo.setAttribute('position', new THREE.InterleavedBufferAttribute(ib, 3, 0));
+  geo.setAttribute('aFace', new THREE.InterleavedBufferAttribute(ib, 1, 3));
+  geo.setAttribute('aInfo', new THREE.BufferAttribute(a.info, 4));
+  geo.setAttribute('aEdge', new THREE.BufferAttribute(a.edge, 4));
+  if (a.light) geo.setAttribute('aLight', new THREE.BufferAttribute(a.light, 4, true));
+  geo.setIndex(new THREE.BufferAttribute(a.index, 1));
+  geo.computeBoundingBox();
+  geo.computeBoundingSphere();
+  return geo;
+}
+
+/** Buffers of a toArrays() result, for postMessage transfer lists. */
+export const arrayBuffers = (a) => (a ? [a.pos.buffer, a.info.buffer, a.edge.buffer, a.index.buffer, ...(a.light ? [a.light.buffer] : [])] : []);
 
 // corner order per sign so triangles wind CCW seen from outside
 const ORDER_POS = [[0, 0], [1, 0], [1, 1], [0, 1]];
@@ -65,7 +76,10 @@ const ORDER_NEG = [[0, 0], [0, 1], [1, 1], [1, 0]];
 
 /**
  * Mesh a grid. Returns { solid, transparent, stats } (geometries may be null).
- * opts: { ao: true (vertex AO), greedy: true, bake: { ao: {radius, rays} | true, light: true } }
+ * opts: { ao: true (vertex AO), greedy: true, bake: { ao: {radius, rays} | true, light: true },
+ *         chunks: iterable of grid chunks to emit (default: all — clusters pass a subset; the rest of the
+ *                 grid still occludes and lights them), bounds: { min, max } region the bakes cover,
+ *         arrays: true → return plain typed arrays instead of geometries (workers) }
  */
 export function buildMesh(grid, palette, opts = {}) {
   const t0 = performance.now();
@@ -75,7 +89,7 @@ export function buildMesh(grid, palette, opts = {}) {
   const hasLights = palette.defs.some((d) => d?.light);
   const bakeOpts = opts.bake ?? {};
   const bakeAO = !!bakeOpts.ao, bakeLight = !!bakeOpts.light && hasLights;
-  const baker = (bakeAO || bakeLight) && grid.bounds() ? new Baker(grid, palette, cls, { ao: bakeOpts.ao, light: bakeLight && bakeOpts.light }) : null;
+  const baker = (bakeAO || bakeLight) && grid.bounds() ? new Baker(grid, palette, cls, { ao: bakeOpts.ao, light: bakeLight && bakeOpts.light, region: opts.bounds }) : null;
   const useLight = !!baker?.light;
   const vao = opts.ao !== false, greedy = opts.greedy !== false;
   const tBake = performance.now() - t0;
@@ -92,7 +106,7 @@ export function buildMesh(grid, palette, opts = {}) {
   const nbr = new Array(27), fw = [0, 0, 0], cw = [0, 0, 0];
   let faces = 0;
 
-  for (const chunk of grid.chunks.values()) {
+  for (const chunk of opts.chunks ?? grid.chunks.values()) {
     const ox = chunk.cx * N, oy = chunk.cy * N, oz = chunk.cz * N;
     // padded copy with a 1-voxel border from the 26 neighbor chunks
     for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++)
@@ -247,7 +261,7 @@ export function buildMesh(grid, palette, opts = {}) {
       }
     }
   }
-  const solid = out[0].toGeometry(), transparent = out[1].toGeometry();
+  const solid = opts.arrays ? out[0].toArrays() : out[0].toGeometry(), transparent = opts.arrays ? out[1].toArrays() : out[1].toGeometry();
   return {
     solid, transparent,
     stats: { quads: out[0].n + out[1].n, triangles: (out[0].n + out[1].n) * 2, ms: Math.round(performance.now() - t0), bakeMs: Math.round(tBake), lights: baker?.light?.groups ?? 0 },

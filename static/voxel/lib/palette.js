@@ -137,6 +137,32 @@ export class Palette {
     return this._tex;
   }
 
+  /** Ordered [name, def] list — rebuilds an identical palette (same ids) with Palette.deserialize (workers). */
+  serialize(from = 1) { return this.defs.slice(from).map((d) => [d.name ?? null, d.src]); }
+  static deserialize(list) { const P = new Palette(); for (const [name, src] of list) P.add(name, src); return P; }
+
+  /**
+   * Merge materials another palette added from id `firstId` on (e.g. person() colors created in a worker:
+   * `absorb(theirs.serialize(firstId), firstId)`). Named ones match by name, unnamed ones by definition.
+   * Returns an id remap table (Uint16Array indexed by their id).
+   */
+  absorb(list, firstId) {
+    const map = new Uint16Array(firstId + list.length);
+    for (let i = 0; i < firstId; i++) map[i] = i;
+    this._srcCache ??= new Map();
+    list.forEach(([name, src], k) => {
+      let id;
+      if (name) id = this.names.has(name) ? this.names.get(name) : this.add(name, src);
+      else {
+        const key = JSON.stringify(src);
+        id = this._srcCache.get(key) ?? this.add(null, src);
+        this._srcCache.set(key, id);
+      }
+      map[firstId + k] = id;
+    });
+    return map;
+  }
+
   /** Plain-object dump (handy for the debug panel / copying a palette out). */
   toJSON() {
     const out = {};
