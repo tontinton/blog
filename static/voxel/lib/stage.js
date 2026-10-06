@@ -135,7 +135,7 @@ export class Stage {
   _mesh(model) {
     const { grid, palette, opts, inner, uniforms } = model;
     const t0 = performance.now();
-    for (const c of [...inner.children]) { inner.remove(c); c.geometry?.dispose(); c.material?.dispose(); c.customDepthMaterial?.dispose(); }
+    for (const c of [...inner.children]) { inner.remove(c); c.geometry?.dispose(); c.material?.dispose(); c.customDepthMaterial?.dispose(); c.customDistanceMaterial?.dispose(); }
     const res = buildMesh(grid, palette, { bake: opts.bake, ao: opts.ao, greedy: opts.greedy });
     const light = !!res.solid?.attributes.aLight || !!res.transparent?.attributes.aLight;
     const b = grid.bounds();
@@ -157,6 +157,7 @@ export class Stage {
     if (res.solid) {
       const mesh = make(res.solid, createVoxelMaterial({ uniforms, light, hooks: opts.hooks }));
       mesh.customDepthMaterial = createVoxelDepthMaterial({ uniforms, hooks: opts.hooks });
+      mesh.customDistanceMaterial = createVoxelDepthMaterial({ uniforms, hooks: opts.hooks, distance: true });
       mesh.castShadow = opts.shadow !== false; mesh.receiveShadow = opts.receive !== false;
       mesh.frustumCulled = false;
       inner.add(mesh);
@@ -557,7 +558,9 @@ export class Stage {
     vc.up.set(0, -1, 0);
     vc.lookAt(tgt);
     vc.updateMatrixWorld();
-    vc.projectionMatrix.copy(cam.projectionMatrix);
+    // the mirrored view flips screen x, so an off-center (camera.offset) ortho frustum must flip too
+    if (cam.isOrthographicCamera) { vc.left = -cam.right; vc.right = -cam.left; vc.updateProjectionMatrix(); }
+    else vc.projectionMatrix.copy(cam.projectionMatrix);
     gu.uReflMatrix.value.set(0.5, 0, 0, 0.5, 0, 0.5, 0, 0.5, 0, 0, 0.5, 0.5, 0, 0, 0, 1).multiply(vc.projectionMatrix).multiply(vc.matrixWorldInverse);
     const r = this.renderer;
     this.ground.visible = false;
@@ -594,6 +597,10 @@ export class Stage {
       this._render(this.time);
       ctx.drawImage(this.renderer.domElement, (i % cols) * W, Math.floor(i / cols) * H);
     }
+    // restore the original view
+    this.camera.position.copy(this.controls.target).add(new THREE.Vector3().setFromSphericalCoords(dist, pol, az0));
+    this.camera.lookAt(this.controls.target);
+    if (this.look.sun.follow) this._fitShadow();
     return jpeg ? out.toDataURL('image/jpeg', 0.88) : out.toDataURL('image/png');
   }
 

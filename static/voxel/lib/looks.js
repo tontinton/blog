@@ -250,11 +250,13 @@ export const LOOKS = {
 
 export function isObj(v) { return v && typeof v === 'object' && !Array.isArray(v); }
 
-/** deep merge (arrays and non-objects replace) */
+const clone = (v) => (Array.isArray(v) ? v.map(clone) : isObj(v) ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, clone(x)])) : v);
+
+/** deep merge into a fresh object (arrays and non-objects replace; nothing is shared with the inputs) */
 export function merge(base, over) {
-  if (!isObj(over)) return over === undefined ? base : over;
-  const out = { ...base };
-  for (const k of Object.keys(over)) out[k] = isObj(base?.[k]) && isObj(over[k]) ? merge(base[k], over[k]) : over[k];
+  if (!isObj(over)) return clone(over === undefined ? base : over);
+  const out = isObj(base) ? clone(base) : {};
+  for (const k of Object.keys(over)) out[k] = isObj(out[k]) && isObj(over[k]) ? merge(out[k], over[k]) : clone(over[k]);
   return out;
 }
 

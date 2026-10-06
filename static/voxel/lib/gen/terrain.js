@@ -117,6 +117,7 @@ export function pond(g, c, o = {}) {
   const R = o.radius ?? 5, depth = o.depth ?? 2;
   const surf = g.top(Math.round(c[0]), Math.round(c[1]));
   const level = o.level ?? surf;
+  if (!Number.isFinite(level)) return g; // nothing to dig into at the center
   const cells = [];
   for (let x = Math.floor(c[0] - R - 2); x <= c[0] + R + 2; x++) for (let z = Math.floor(c[1] - R - 2); z <= c[1] + R + 2; z++) {
     const d = Math.hypot(x - c[0], z - c[1]) / (R * (1 + N.simplex2(x * 0.2, z * 0.2) * 0.25));
@@ -124,6 +125,7 @@ export function pond(g, c, o = {}) {
   }
   for (const [x, z, d] of cells) {
     const top = g.top(x, z, level + 4);
+    if (!Number.isFinite(top)) continue; // empty column (pond overhangs the edge)
     if (d < 1) {
       const carve = Math.max(1, Math.round(depth * (1 - d * d)) + (top - level) + 1);
       for (let i = 0; i < carve; i++) g.set(x, top - i, z, 0);

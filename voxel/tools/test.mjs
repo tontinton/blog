@@ -207,6 +207,35 @@ test('parseVox: z-up → y-up, palette colors', () => {
   assert.equal(palette.defs[top].src.color, '#0000ff');
 });
 
+// ---- regressions from the code review ----------------------------------------------------------------
+test('pond over the tile edge terminates', () => { const g = new VoxelGrid(new Palette({ ...NATURE })); V.tile(g, [-10, -10], [10, 10]); V.pond(g, [9, 0], { radius: 4 }); assert.ok(g.count() > 0); });
+test('set rejects non-finite coords; get floors', () => {
+  const g = new VoxelGrid(P);
+  assert.throws(() => g.set(0, -Infinity, 0, P.a));
+  g.set(-0.5, 0, 0, P.a); assert.equal(g.get(-0.5, 0, 0), P.a);
+});
+test('stamp onto itself terminates', () => { const g = new VoxelGrid(P).box([0, 0, 0], [3, 0, 0], 'a'); g.stamp(g, 40, 0, 0); assert.equal(g.count(), 8); });
+test('merge never aliases presets', () => { const L = V.resolveLook('studio'); L.fog.amount = 0.77; L.grade.lift[0] = 0.5; assert.equal(V.DEFAULT_LOOK.fog.amount, 0); assert.equal(V.DEFAULT_LOOK.grade.lift[0], 0); });
+test('roof with fractional slope has relief and a ridge', () => {
+  const Q = new Palette({ r: '#f00', t: '#0f0' });
+  const g = new VoxelGrid(Q).roof([0, 10, 0], [8, 10, 6], 'r', { slope: 0.5, ridge: 't' });
+  assert.ok(g.bounds().size[1] >= 3); let ridge = 0; g.forEach((x, y, z, id) => { if (id === Q.t) ridge++; }); assert.ok(ridge > 0);
+  const h = new VoxelGrid(Q).roof([0, 10, 0], [12, 10, 6], 'r', { type: 'hip', axis: 'z', ridge: 't' });
+  let hr = 0; h.forEach((x, y, z, id) => { if (id === Q.t) hr++; }); assert.ok(hr > 0, 'hip ridge');
+});
+test('house ridge/chimney match the real roof', () => {
+  const g = new VoxelGrid(new Palette({ ...NATURE, ...BUILD })); const r = V.house(g, [0, 1, 0], { slope: 2 });
+  let top = -Infinity; for (let x = 0; x < 9; x++) for (let z = 0; z < 7; z++) top = Math.max(top, g.top(x, z)); assert.equal(r.ridge, top);
+  const c = V.house(new VoxelGrid(new Palette({ ...NATURE, ...BUILD })), [0, 1, 0], { slope: 2, chimney: true });
+  assert.ok(c.chimneyTop[1] > c.ridge + 1, 'chimney pokes out of the roof');
+});
+test('ascii flip mirrors ragged rows against the widest row', () => {
+  const g = new VoxelGrid(P).ascii([0, 2, 0], `
+    RRRR
+    R`, { R: 'a' }, { flip: true });
+  assert.ok(g.has(3, 1, 0) && !g.has(0, 1, 0));
+});
+
 // ---- generators: every one runs, writes voxels, and is deterministic per seed -----------------------
 const GEN = {
   oak: (g) => V.oak(g, [0, 1, 0], { seed: 3 }), blossom: (g) => V.blossom(g, [0, 1, 0], { seed: 3 }), bush: (g) => V.bush(g, [0, 1, 0], { seed: 3 }),
