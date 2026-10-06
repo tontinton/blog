@@ -6,9 +6,23 @@ with Chromium at `/opt/pw-browsers`). Rendering is software WebGL (SwiftShader):
 
 ## Scaffold a piece
 ```sh
-node new.mjs <slug> "Title" "One-line description." [look]
+node new.mjs <slug> "Title" "One-line description." [look] [--short <name>]
 ```
-Copies `voxel/template/` to `static/voxel/<slug>/` and appends to `static/voxel/pieces.json`.
+Copies `voxel/template/` to `static/voxel/<slug>/`, appends to `static/voxel/pieces.json` and creates its
+short link (`--short`, or the first free 3+ letters of the slug).
+
+## Short links (`tontinton.com/v/<short>`)
+Every piece with a `short` in `pieces.json` is also served at `/v/<short>/` — a generated copy of its
+`index.html` with `<base href="/voxel/<slug>/">` (so the address bar stays short and all relative paths
+still resolve) and a canonical link to the real page. Plain static files: no host redirects needed.
+```sh
+node links.mjs            # regenerate static/v/ (after changing a piece's index.html or a short name)
+node links.mjs --check    # stale? (test.mjs runs this)
+node shot.mjs /v/cot/     # renders exactly like /voxel/cottage/
+```
+Short names: `[a-z0-9-]`, ≤ 16 chars, unique; pick something memorable (`cot`, `lh`, `neon`). Renaming
+removes the old generated page. Pieces must resolve URLs against `document.baseURI` (the lib does), never
+`location.href`.
 
 ## Screenshots (the main feedback loop)
 ```sh

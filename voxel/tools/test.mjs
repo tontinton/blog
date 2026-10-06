@@ -341,5 +341,15 @@ test('actors: follow chain trails its target', () => {
   assert.ok(d0 < 6 && d2 > d0, `chain order (d0 ${d0.toFixed(1)}, d2 ${d2.toFixed(1)})`);
 });
 
+// ---- short links (/v/<short>/) --------------------------------------------------------------------------
+const links = await import('./links.mjs');
+test('short links: valid, unique, and static/v/ is up to date (else: node links.mjs)', () => {
+  const pieces = links.readPieces();
+  assert.deepEqual(links.validate(pieces), []);
+  assert.deepEqual(links.stale(pieces), []);
+  const page = links.shortPage({ slug: 'x' }, '<html><head><meta charset="utf-8"><title>t</title></head></html>');
+  assert.ok(page.indexOf('<base href="/voxel/x/">') > page.indexOf('charset') && page.indexOf('<base') < page.indexOf('<title>'), 'base right after charset');
+});
+
 console.log(`${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

@@ -160,7 +160,7 @@ export class Stage {
    */
   async world(spec) {
     const t0 = performance.now();
-    const abs = (u) => new URL(u, location.href).href;
+    const abs = (u) => new URL(u, document.baseURI).href; // baseURI: pieces are also served from /v/<short>/ with <base href>
     const P = spec.palette instanceof Palette ? spec.palette
       : new Palette(typeof spec.palette === 'string' ? await loadPaletteDefs(abs(spec.palette)) : spec.palette ?? {});
     const only = (params.get('region') ?? spec.only ?? '').toString().split(',').filter(Boolean);

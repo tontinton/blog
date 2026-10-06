@@ -18,7 +18,8 @@ static/voxel/
     vendor/          three.js r186 (single minified module) + lil-gui
   <slug>/            one folder per piece: index.html + scene.js (+ preview.jpg)
   cottage/           the demo piece — read it first, it's ~50 lines
-  pieces.json        manifest for the future /voxel gallery (new.mjs appends to it)
+  pieces.json        manifest for the future /voxel gallery (new.mjs appends to it); `short` = short link name
+static/v/<short>/    generated short links: tontinton.com/v/cot serves /voxel/cottage/ (tools/links.mjs)
 voxel/               (repo root, NOT published)
   README.md          you are here
   docs/api.md        full API reference
@@ -30,14 +31,15 @@ voxel/               (repo root, NOT published)
   docs/extending.md  extend-first workflow: add generators/shadings/looks/creatures to the lib
   template/          what new.mjs copies
   lab/               unpublished test scenes (also good worked examples), served at /voxel/_lab/?scene=name
-  tools/             new.mjs, shot.mjs, test.mjs (unit tests), check.mjs (render smoke test), serve.mjs, build-vendor.mjs
+  tools/             new.mjs, shot.mjs, test.mjs (unit tests), check.mjs (render smoke test), serve.mjs, build-vendor.mjs,
+                     links.mjs (short links /v/<short>/)
 ```
 
 ## 60-second start
 
 ```sh
 cd voxel/tools
-node new.mjs lighthouse "Lighthouse" "A lighthouse on a rock at dusk." golden   # scaffolds static/voxel/lighthouse/
+node new.mjs lighthouse "Lighthouse" "A lighthouse on a rock at dusk." golden --short lh   # static/voxel/lighthouse/ + /v/lh/
 # edit static/voxel/lighthouse/scene.js
 node shot.mjs /voxel/lighthouse/ --views 4          # renders 4 rotated views into out/lighthouse.png — look at it
 node shot.mjs /voxel/lighthouse/ --size 1200x630 --out ../../static/voxel/lighthouse/preview.jpg
@@ -107,7 +109,9 @@ stage.start();
 - Budget: < ~1.5M voxels / < ~300k quads (≤ 500k + instancing in a world) and ≤ ~150 draw calls keeps
   mobile happy. `stage.stats()` (printed by shot.mjs) tells you.
 - Close-ups for details: `--query 'target=x,y,z' --zoom 4`. Lab catalog to browse what exists.
-- After finishing: write `preview.jpg`, fill in `pieces.json` (title/description/tags), commit.
+- After finishing: write `preview.jpg`, fill in `pieces.json` (title/description/tags, `short`), run
+  `node links.mjs` (regenerates the `/v/<short>/` pages — needed after any edit to the piece's
+  `index.html`; `test.mjs` fails if they're stale), commit.
 - The `/voxel/` gallery page doesn't exist yet: pieces' back link goes home. When building the gallery,
   read `static/voxel/pieces.json` and flip the default in `lib/ui.js` (marked `TODO(gallery)`).
 
