@@ -4,9 +4,10 @@
 //     materials: { 12: { emissive: 4, light: true }, 33: { kind: 'water' } },   // per palette index overrides
 //   });
 //   stage.add(grid);
-//   // or merge into your own scene: g.stamp(grid, 10, 1, 4) (palettes merge by material name: 'vox12', ...)
+//   // or merge into your own scene: g.stamp(grid, 10, 1, 4) (palettes merge by material name: 'vox12-ff8800', ...)
 //
 // Supports multiple models + scene-graph translations (nTRN/nGRP/nSHP); rotations are ignored.
+// Materials are named `vox<index>-<hex>` (e.g. 'vox12-ff8800'); `materials` overrides are keyed by palette index.
 import { Palette } from './palette.js';
 import { VoxelGrid } from './grid.js';
 import { hex } from './color.js';
@@ -21,7 +22,7 @@ export function parseVox(buf, opts = {}) {
   const str = (o, n) => String.fromCharCode(...new Uint8Array(buf, o, n));
   if (str(0, 4) !== 'VOX ') throw new Error('not a .vox file');
   const models = [], nodes = new Map();
-  let rgba = null, size = null;
+  let rgba = null, size = null; // no RGBA chunk → grey ramp (MagicaVoxel's default palette isn't bundled)
   const readDict = (o) => {
     const n = dv.getInt32(o, true); o += 4;
     const d = {};
@@ -74,8 +75,10 @@ export function parseVox(buf, opts = {}) {
     let id = ids.get(ci);
     if (id === undefined) {
       const r = rgba ? rgba[(ci - 1) * 4] : ci, gg = rgba ? rgba[(ci - 1) * 4 + 1] : ci, b = rgba ? rgba[(ci - 1) * 4 + 2] : ci;
-      const name = `${opts.prefix ?? 'vox'}${ci}`;
-      id = palette.has(name) ? palette.id(name) : palette.add(name, { color: hex([r / 255, gg / 255, b / 255]), jitter: 0.02, ...(opts.base ?? {}), ...(opts.materials?.[ci] ?? {}) });
+      const color = hex([r / 255, gg / 255, b / 255]);
+      // names carry the color so two models' palettes merged into one scene never swap colors
+      const name = `${opts.prefix ?? 'vox'}${ci}-${color.slice(1)}`;
+      id = palette.has(name) ? palette.id(name) : palette.add(name, { color, jitter: 0.02, ...(opts.base ?? {}), ...(opts.materials?.[ci] ?? {}) });
       ids.set(ci, id);
     }
     return id;

@@ -148,7 +148,8 @@ P.pyramid = function (c, s, m, opts = {}) {
  *       triangular gable ends (walls), ridge: id for the ridge row.
  */
 P.roof = function (a, b, m, opts = {}) {
-  const type = opts.type ?? 'gable', oh = opts.overhang ?? 1, slope = opts.slope ?? 1, th = opts.thickness ?? slope + 1;
+  const type = opts.type ?? 'gable', oh = opts.overhang ?? 1, slope = opts.slope ?? 1;
+  const th = opts.thickness === Infinity ? Infinity : Math.max(1, Math.ceil(opts.thickness ?? slope + 1));
   const x0 = Math.min(a[0], b[0]) - oh, x1 = Math.max(a[0], b[0]) + oh, z0 = Math.min(a[2], b[2]) - oh, z1 = Math.max(a[2], b[2]) + oh;
   const y0 = a[1];
   const axis = opts.axis ?? (x1 - x0 >= z1 - z0 ? 'x' : 'z');
@@ -160,13 +161,14 @@ P.roof = function (a, b, m, opts = {}) {
     if (type === 'hip') return Math.min(dx, dz) * slope;
     return (axis === 'x' ? dz : dx) * slope;
   };
-  const ridgeH = type === 'shed' ? (axis === 'x' ? z1 - z0 : x1 - x0) * slope : (axis === 'x' ? Math.floor((z1 - z0) / 2) : Math.floor((x1 - x0) / 2)) * slope;
+  let ridgeH = 0;
+  for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) ridgeH = Math.max(ridgeH, Math.floor(H(x, z)));
   for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) {
     const h = Math.floor(H(x, z));
     const top = y0 + h;
     const lowest = Math.max(y0, top - th + 1);
     for (let y = lowest; y <= top; y++) {
-      const isRidge = h >= ridgeH - 0.001 && type !== 'flat' && type !== 'shed';
+      const isRidge = h === ridgeH && type !== 'flat' && type !== 'shed';
       this.put(x, y, z, isRidge && opts.ridge ? opts.ridge : m, opts.mode);
     }
   }
@@ -238,11 +240,12 @@ P.layers = function (origin, layers, legend, opts = {}) {
 P.ascii = function (origin, pic, legend, opts = {}) {
   const plane = opts.plane ?? 'xy';
   const rows = textRows(pic);
+  const width = Math.max(...rows.map((r) => r.length));
   rows.forEach((row, r) => {
     for (let c = 0; c < row.length; c++) {
       const m = legend[row[c]];
       if (m === undefined || m === null) continue;
-      const cc = opts.flip ? row.length - 1 - c : c;
+      const cc = opts.flip ? width - 1 - c : c;
       const p = plane === 'xy' ? [origin[0] + cc, origin[1] - r, origin[2]] : plane === 'zy' ? [origin[0], origin[1] - r, origin[2] + cc] : [origin[0] + cc, origin[1], origin[2] + r];
       this.put(p[0], p[1], p[2], m, opts.mode);
     }

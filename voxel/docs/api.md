@@ -223,7 +223,7 @@ All accept `seed` (or `R`, an rng) and material overrides. Foliage uses `mode: '
 · `bricks(g, a, b, { size: [3,2], stones, mortar, axis, stagger })` (big stones + mortar; `axis: 'y'` = floor planks/paving)
 · props: `crate`, `barrel`, `table`, `chair`, `bed`, `bookshelf`, `fireplace(g, p, side, { w, h, stone, fire })`,
   `bench(g, p, side, { length })`, `signpost(g, p, { text })`, `lantern(g, ceilingPoint, { drop })`, `campfire(g, p)` → fire top
-· `person(g, p, { side, pose: 'stand'|'wave'|'sit', height, skin, shirt, pants, hair, hat, seed })` — tiny ~7-voxel people (random colors per seed)
+· `person(g, p, { side, pose: 'stand'|'wave'|'sit', height: 7|8, skin, shirt, pants, hair, hat, seed })` — tiny ~7-voxel people (random colors per seed)
 · `bridge(g, a, b, { width, arch, deck, rail, post })` · `boat(g, keelStern, { length, width, height, hull, hullTop, deck, cabin, mast })` (clears its interior — drop it into water)
 · `car(g, p, { color, axis, glass, wheel, light })`
 · nature.js also has `waterfall(g, top, bottomY, { width, depth, water, foam })` (pair with `stage.particles({ preset: 'mist', box })`)
@@ -241,6 +241,7 @@ All accept `seed` (or `R`, an rng) and material overrides. Foliage uses `mode: '
 - color: `rgb, hex, toInt, srgbToLinear, linearToSrgb, hsl, fromHsl, oklab, fromOklab, mixColor, shade(c, ±L),
   shift(c, { h, s, l }), gradient([c0, c1, …])(t), ramp(base, n), luminance`
 - `loadVox(url, { materials: { [paletteIndex]: def }, palette, prefix, base, recenter })` → `{ grid, palette, ids }`;
-  `parseVox(arrayBuffer, opts)`
+  `parseVox(arrayBuffer, opts)`. Materials are named `vox<index>-<hex>`; translations are applied, rotations
+  ignored; files without an RGBA chunk get a grey ramp.
 - Low level: `buildMesh(grid, palette, opts)`, `createVoxelMaterial`, `createVoxelDepthMaterial`,
   `createVoxelUniforms`, `Post`, `resolveLook`, `merge`, `LOOKS`, `DEFAULT_LOOK`, `PARTICLE_PRESETS`.

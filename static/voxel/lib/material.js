@@ -315,10 +315,14 @@ export function createVoxelMaterial(opts) {
       .replace('#include <aomap_fragment>', FRAG_AO)
       .replace('#include <opaque_fragment>', '#include <opaque_fragment>\n/*VOXEL_OUTPUT_HOOK*/');
     if (transparent) {
-      // per-material clarity: opacity 0 → fully refractive, 1 → solid color
+      // per-material clarity (opacity 0 → fully refractive, 1 → solid color) and ior. Both assignments live
+      // inside included chunks, so splice in patched copies of the chunks.
+      const C = THREE.ShaderChunk;
       shader.fragmentShader = shader.fragmentShader
-        .replace('material.transmission = transmission;', 'material.transmission = transmission * (1.0 - matT(mid, 11).x);')
+        .replace('#include <transmission_fragment>', C.transmission_fragment.replace('material.transmission = transmission;', 'material.transmission = transmission * (1.0 - matT(mid, 11).x);'))
+        .replace('#include <lights_physical_fragment>', C.lights_physical_fragment.replace('material.ior = ior;', 'material.ior = matT(mid, 11).y;'))
         .replace('#include <opaque_fragment>', `#include <opaque_fragment>\n#ifndef USE_TRANSMISSION\ngl_FragColor.a = mix(0.25, 1.0, matT(mid, 11).x);\n#endif`);
+      if (!shader.fragmentShader.includes('matT(mid, 11).y')) console.warn('voxel: ior patch failed (three version changed?)');
     }
     applyHooks(shader, hooks);
     mat.userData.shader = shader;
@@ -328,10 +332,13 @@ export function createVoxelMaterial(opts) {
   return mat;
 }
 
-/** Depth material for shadows that follows sway and skips materials with `shadow: false`. */
+/**
+ * Shadow material that follows sway and skips materials with `shadow: false`.
+ * Directional/spot shadows use the depth variant; point-light shadows need `distance: true`.
+ */
 export function createVoxelDepthMaterial(opts) {
   const { uniforms, hooks } = opts;
-  const mat = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+  const mat = opts.distance ? new THREE.MeshDistanceMaterial() : new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
     shader.vertexShader = shader.vertexShader
@@ -345,6 +352,6 @@ export function createVoxelDepthMaterial(opts) {
     shader.vertexShader = shader.vertexShader.replace('/*VOXEL_VERTEX_HOOK*/', hooks?.vertex ?? '');
   };
   const hk = hookKey(hooks);
-  mat.customProgramCacheKey = () => `voxel-depth-${hk}`;
+  mat.customProgramCacheKey = () => `voxel-${opts.distance ? 'distance' : 'depth'}-${hk}`;
   return mat;
 }

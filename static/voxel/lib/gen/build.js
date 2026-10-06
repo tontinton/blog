@@ -123,14 +123,18 @@ export function house(g, p, o = {}) {
   const roof = o.roof ?? 'roofTile';
   const ry = p[1] + h;
   g.roof([lo[0], ry, lo[2]], [hi[0], ry, hi[2]], roof, { type: o.roofType ?? 'gable', overhang: o.overhang ?? 1, slope: o.slope ?? 1, gable: o.gable ?? wall, ridge: o.ridge, axis: o.axis });
+  // the real ridge: highest roof voxel over the footprint
+  let ridge = ry;
+  const scanTop = ry + Math.ceil(Math.max(w, d) * (o.slope ?? 1)) + 2;
+  for (let x = lo[0]; x <= hi[0]; x++) for (let z = lo[2]; z <= hi[2]; z++) ridge = Math.max(ridge, g.top(x, z, scanTop));
   if (o.chimney) {
     const c = o.chimney === true ? {} : o.chimney;
     const at = c.at ?? [Math.round(w * 0.75), Math.round(d * 0.35)];
-    const top = ry + Math.ceil(Math.min(w, d) / 2) + (c.h ?? 3);
+    const top = ridge + (c.h ?? 3);
     g.box([p[0] + at[0], ry - 1, p[2] + at[1]], [p[0] + at[0] + 1, top, p[2] + at[1] + 1], c.m ?? 'stoneBrick');
-    return { ridge: ry + Math.ceil(Math.min(w, d) / 2), chimneyTop: [p[0] + at[0], top + 1, p[2] + at[1]] };
+    return { ridge, chimneyTop: [p[0] + at[0], top + 1, p[2] + at[1]] };
   }
-  return { ridge: ry + Math.ceil(Math.min(w, d) / 2) };
+  return { ridge };
 }
 
 /** Fence along a polyline of [x, y, z] points (y: ground level; posts stand on it). opts: post, rail, height (2), every (3), rails ([1, 2]) */
@@ -351,7 +355,8 @@ const PEOPLE = {
 
 /**
  * Tiny person (diorama scale, ~7 voxels tall) facing `side`. Colors are random per seed unless given.
- * opts: height (6 | 7 | 8), skin, shirt, pants, hair, hat (id), pose 'stand' | 'wave' | 'sit', side, palette-free (colors are added via g.palette.color)
+ * opts: height (7 | 8 — 8 has longer legs), skin, shirt, pants, hair, hat (id), pose 'stand' | 'wave' | 'sit', side.
+ * Random colors are added to the grid's palette via palette.color().
  */
 export function person(g, p, o = {}) {
   const R = R_(o);

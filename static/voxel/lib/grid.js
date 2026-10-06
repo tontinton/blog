@@ -48,6 +48,7 @@ export class VoxelGrid {
   }
 
   get(x, y, z) {
+    x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
     const c = this._chunk(x >> CHUNK_BITS, y >> CHUNK_BITS, z >> CHUNK_BITS, false);
     return c ? c.data[(x & M) | ((z & M) << CHUNK_BITS) | ((y & M) << (2 * CHUNK_BITS))] : 0;
   }
@@ -55,6 +56,7 @@ export class VoxelGrid {
 
   set(x, y, z, m) {
     m = typeof m === 'number' ? m : this.mat(m);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) throw new Error(`VoxelGrid.set: non-finite coordinate (${x}, ${y}, ${z})`);
     x = Math.floor(x); y = Math.floor(y); z = Math.floor(z);
     const c = this._chunk(x >> CHUNK_BITS, y >> CHUNK_BITS, z >> CHUNK_BITS, m !== 0);
     if (c) { c.data[(x & M) | ((z & M) << CHUNK_BITS) | ((y & M) << (2 * CHUNK_BITS))] = m; this._b = undefined; }
@@ -171,6 +173,7 @@ export class VoxelGrid {
    * Different palettes are merged automatically (by material name).
    */
   stamp(src, x = 0, y = 0, z = 0, opts = {}) {
+    if (src === this) src = src.clone(); // reading while writing would never end
     const rot = ((opts.rot ?? 0) % 4 + 4) % 4, mode = opts.mode ?? 'replace';
     let remap = opts.remap;
     if (!remap && src.palette && this.palette && src.palette !== this.palette) {
@@ -225,7 +228,8 @@ export class VoxelGrid {
   recenter(to = [0, 0, 0]) {
     const b = this.bounds();
     if (!b) return this;
-    const dx = to[0] - Math.floor((b.min[0] + b.max[0] + 1) / 2), dy = to[1] - b.min[1], dz = to[2] - Math.floor((b.min[2] + b.max[2] + 1) / 2);
+    // same bottom-center voxel as stamp({ center: true })
+    const dx = to[0] - Math.floor((b.min[0] + b.max[0]) / 2), dy = to[1] - b.min[1], dz = to[2] - Math.floor((b.min[2] + b.max[2]) / 2);
     const g = new VoxelGrid(this.palette).stamp(this, dx, dy, dz);
     this.chunks = g.chunks; this._lk = -1; this._lc = null; this._b = undefined;
     return this;
