@@ -42,7 +42,7 @@ uniform vec4 uLife; // blink, blinkSpeed, fade, spin
 attribute vec4 aSeed; // base (0..1)^3, seed
 attribute vec3 aCol;
 varying vec3 vCol; varying float vAlpha;
-float life; // 0..1 along fall/rise
+float life = 0.0; // 0..1 along fall/rise
 vec3 particlePos(out float alphaMul) {
   vec3 b = aSeed.xyz; float s = aSeed.w;
   float sp = uMove.y * (0.7 + 0.6 * fract(s * 7.31));
@@ -136,7 +136,9 @@ export class Particles {
           vec2 p = gl_PointCoord * 2.0 - 1.0;
           float a = SOFT == 1 ? exp(-dot(p, p) * 3.0) - 0.05 : 1.0;
           if (a <= 0.0) discard;
-          gl_FragColor = vec4(vCol * uGlow, clamp(a * vAlpha * uOpacity, 0.0, 1.0));
+          float al = clamp(a * vAlpha * uOpacity, 0.0, 1.0);
+          if (isnan(al) || isinf(al)) discard;
+          gl_FragColor = vec4(clamp(vCol * uGlow, 0.0, 64.0), al);
         }`,
     });
     return new THREE.Points(g, mat);
@@ -181,7 +183,7 @@ export class Particles {
       mat = new THREE.ShaderMaterial({
         uniforms: this.uniforms, transparent: true, depthWrite: false, toneMapped: false,
         vertexShader: `${MOTION_GLSL}\n${vert}\nvoid main() {${body}\n gl_Position = projectionMatrix * viewMatrix * vec4(transformed, 1.0); }`,
-        fragmentShader: 'uniform float uGlow; uniform float uOpacity; varying vec3 vCol; varying float vAlpha; void main() { gl_FragColor = vec4(vCol * uGlow, vAlpha * uOpacity); }',
+        fragmentShader: 'uniform float uGlow; uniform float uOpacity; varying vec3 vCol; varying float vAlpha; void main() { float al = clamp(vAlpha * uOpacity, 0.0, 1.0); if (isnan(al)) discard; gl_FragColor = vec4(clamp(vCol * uGlow, 0.0, 64.0), al); }',
       });
     }
     const mesh = new THREE.Mesh(g, mat);

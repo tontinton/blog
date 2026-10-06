@@ -118,6 +118,12 @@ uniform vec4 uBevel;  // width (voxels), normal strength, edge lighten(+)/darken
 uniform vec4 uLook;   // emissive mult, baked light mult, jitter mult, saturation
 uniform vec4 uWater;  // ripple scale, ripple speed, ripple strength, scattering glow
 uniform float uSeed;
+// Last line of defence against NaN/Inf (driver-specific math at grazing angles, half-float overflow):
+// one non-finite pixel would otherwise turn into a white bloom disc with a black centre.
+vec3 vxSafe(vec3 c, vec3 fallback) {
+  if (any(isnan(c)) || any(isinf(c))) return fallback;
+  return clamp(c, 0.0, 512.0);
+}
 flat varying int vMid;
 flat varying int vFace;
 varying vec3 vObj;
@@ -181,7 +187,7 @@ if (m3.z > 0.0 && uBevel.w > 0.0) {
   vec3 U = dirU(fdir), V = dirV(fdir);
   vec2 q = vec2(dot(vObj, U), dot(vObj, V));
   vec2 fq = abs(fract(q) - 0.5);
-  vec2 fw = fwidth(q);
+  vec2 fw = max(fwidth(q), vec2(1e-4)); // equal smoothstep edges are undefined (NaN on some GPUs)
   vec2 ln = smoothstep(0.5 - uBevel.w - fw, 0.5 - uBevel.w + fw, fq);
   col *= 1.0 - m3.z * max(ln.x, ln.y);
 }
@@ -240,9 +246,11 @@ totalEmissiveRadiance += emis;
 
 const FRAG_AO = /* glsl */ `
 {
-  float ao = pow(vOcc.x, uAO.w);
+  // clamp first: fully occluded corners are exactly 0, and mobile GPUs interpolate them slightly below 0 —
+  // pow(negative) is NaN, a black pixel that bloom smears into a white disc
+  float ao = pow(clamp(vOcc.x, 0.0, 1.0), uAO.w);
   float vao = mix(1.0, ao, uAO.x * m3.w);
-  float rao = mix(1.0, vOcc.y, uAO.y * m3.w);
+  float rao = mix(1.0, clamp(vOcc.y, 0.0, 1.0), uAO.y * m3.w);
   float occ = vao * rao;
   reflectedLight.indirectDiffuse *= occ;
   reflectedLight.indirectSpecular *= occ;
@@ -344,7 +352,7 @@ export function createVoxelMaterial(opts) {
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${FRAG_BEVEL}`)
       .replace('#include <emissivemap_fragment>', FRAG_EMISSIVE)
       .replace('#include <aomap_fragment>', FRAG_AO)
-      .replace('#include <opaque_fragment>', '#include <opaque_fragment>\n/*VOXEL_OUTPUT_HOOK*/');
+      .replace('#include <opaque_fragment>', '#include <opaque_fragment>\ngl_FragColor.rgb = vxSafe(gl_FragColor.rgb, diffuseColor.rgb * 0.5);\n/*VOXEL_OUTPUT_HOOK*/\ngl_FragColor.rgb = vxSafe(gl_FragColor.rgb, vec3(0.0));');
     if (transparent) {
       // per-material clarity (opacity 0 → fully refractive, 1 → solid color) and ior. Both assignments live
       // inside included chunks, so splice in patched copies of the chunks.
