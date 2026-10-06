@@ -24,6 +24,18 @@ Short names: `[a-z0-9-]`, ≤ 16 chars, unique; pick something memorable (`cot`,
 removes the old generated page. Pieces must resolve URLs against `document.baseURI` (the lib does), never
 `location.href`.
 
+## Live preview links (Cloudflare Pages)
+Cloudflare Pages builds every pushed branch of the repo and reports the URLs on the commit (a
+"Cloudflare Pages" check run): a per-commit URL (`https://<hash>.blog-3t8.pages.dev`) and a branch URL
+that always serves the branch's latest push (`https://<branch-alias>.blog-3t8.pages.dev`, the alias is the
+branch name lowercased with non-alphanumerics → `-`, cut to 28 chars). After `git push`:
+```sh
+node preview.mjs                 # waits for the build, prints both URLs + links to the pieces changed vs main
+node preview.mjs cot             # just this piece (short name or slug); --wait 600, --sha <commit>
+```
+Production (`https://tontinton.com/...`) updates when the branch is merged. `voxel/lab/` scenes are not
+published — only `static/` is.
+
 ## Screenshots (the main feedback loop)
 ```sh
 node shot.mjs /voxel/<slug>/                               # → out/<slug>.png (960×720)

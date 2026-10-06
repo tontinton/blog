@@ -32,7 +32,7 @@ voxel/               (repo root, NOT published)
   template/          what new.mjs copies
   lab/               unpublished test scenes (also good worked examples), served at /voxel/_lab/?scene=name
   tools/             new.mjs, shot.mjs, test.mjs (unit tests), check.mjs (render smoke test), serve.mjs, build-vendor.mjs,
-                     links.mjs (short links /v/<short>/)
+                     links.mjs (short links /v/<short>/), preview.mjs (Cloudflare preview link after a push)
 ```
 
 ## 60-second start
@@ -111,7 +111,9 @@ stage.start();
 - Close-ups for details: `--query 'target=x,y,z' --zoom 4`. Lab catalog to browse what exists.
 - After finishing: write `preview.jpg`, fill in `pieces.json` (title/description/tags, `short`), run
   `node links.mjs` (regenerates the `/v/<short>/` pages — needed after any edit to the piece's
-  `index.html`; `test.mjs` fails if they're stale), commit.
+  `index.html`; `test.mjs` fails if they're stale), commit, push, then `node preview.mjs <short>` waits for
+  the Cloudflare Pages build and prints the live link (`https://<branch-alias>.blog-3t8.pages.dev/v/<short>/`)
+  — that link is what you give the user.
 - The `/voxel/` gallery page doesn't exist yet: pieces' back link goes home. When building the gallery,
   read `static/voxel/pieces.json` and flip the default in `lib/ui.js` (marked `TODO(gallery)`).
 
