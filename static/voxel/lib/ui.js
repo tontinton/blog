@@ -144,7 +144,17 @@ function buildGui(GUI, stage) {
     if (!open) fo.close();
     return fo;
   };
-  f('exposure', L, [['exposure', 0.2, 3, 0.01], ['toneMapping', ['agx', 'aces', 'neutral', 'reinhard', 'cineon', 'none']]], true);
+  f('exposure', L, [['exposure', 0.2, 3, 0.01], ['toneMapping', ['neutral', 'agx', 'aces', 'reinhard', 'cineon', 'none']]], true);
+  // background: proxy the color array as individual color pickers
+  const bg = L.background;
+  if (bg.color) { bg.colors = [bg.color]; delete bg.color; }
+  const bgp = { type: bg.type ?? 'linear' };
+  bg.colors.forEach((c, i) => { bgp['color ' + (i + 1)] = c; });
+  const bf = gui.addFolder('background');
+  bf.add(bgp, 'type', ['solid', 'linear', 'radial']).onChange((v) => { bg.type = v; apply(); });
+  bg.colors.forEach((_, i) => bf.addColor(bgp, 'color ' + (i + 1)).onChange((v) => { bg.colors[i] = v; apply(); }));
+  bf.add(bg, 'stars', 0, 2, 0.01).onChange(apply);
+  bf.close();
   f('sun', L.sun, [['color'], ['intensity', 0, 8, 0.01], ['azimuth', -180, 360, 1], ['elevation', 1, 90, 1], ['softness', 0, 8, 0.1], ['shadow']], true);
   f('sky / ambient', L.sky, [['top'], ['horizon'], ['bottom'], ['intensity', 0, 4, 0.01], ['sunGlow', 0, 3, 0.01]]);
   f('fill light', L.fill, [['color'], ['intensity', 0, 4, 0.01], ['azimuth', -180, 360, 1], ['elevation', -30, 90, 1]]);

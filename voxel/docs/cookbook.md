@@ -9,6 +9,24 @@ reference 4), `village` and `harbor` (people, waterfall, bridge, boats, cars), `
 nature generator), `features` (hooks, instances, pivots, lights, pick), `night`, `readme` (the README example).
 The published demo is `static/voxel/cottage/scene.js`.
 
+## Art direction (what makes the references beautiful)
+
+- **Limited palette + accents.** Each reference has 2–3 dominant hues and 1–2 accents: neon shipyard =
+  navy/lavender + cyan & pink light; forest cottage = greens + ochre roof + blue windows + white blossoms;
+  bunny = pink + grass green + one orange carrot; loft = blue-grey stone + warm wood + orange light + blue
+  fabric. Pick these first and build the palette around them (3 shades each).
+- **Value structure.** The subject is the lightest/most saturated thing (lit interior against a dark
+  surround, white blossoms on dark foliage). Keep backgrounds calmer than the subject.
+- **Detail density gradient.** Pack small props (books, pots, crates, flowers, lamps, people) near the
+  focal point; keep edges simpler. Detail at 1-voxel scale is what makes it feel crafted.
+- **A framing base.** A thick, layered tile/edge (banded sides, rock strata, a cutaway) frames the piece
+  like a display stand. Show cross-sections: water volumes, room interiors, soil layers.
+- **Silhouette.** Break the box: tall trees, chimneys + smoke, cranes, ears, clouds. Vary heights.
+- **Light like a photographer.** Warm key + cool fill (or the reverse at night); emissive accents that
+  actually light their surroundings (`light` + bake); AO everywhere for grounding; soft shadows.
+- **Atmosphere.** Fireflies/dust/snow/embers, fog toward the background, DOF for scale. Subtle grain.
+- **Restraint.** Fewer, bigger, cleaner shapes beat noisy everything. Leave some calm surfaces.
+
 ## Scale and composition
 
 - Pieces are small: 30–120 voxels across. A person is ~6–10 voxels tall at "diorama" scale, a door

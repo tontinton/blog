@@ -365,6 +365,7 @@ export class Post {
     r.setRenderTarget(this.scene);
     r.clear(true, true, true);
     r.render(scene, camera);
+    this.sceneInfo = { calls: r.info.render.calls, triangles: r.info.render.triangles }; // before post passes reset it
     r.setClearColor(prevClear, prevAlpha);
 
     this.cam.uCam.value.set(camera.near, camera.far);
