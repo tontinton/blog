@@ -133,7 +133,9 @@ cost the quads.
   a world with a few walkers and no wind redraws a few percent of its pixels per frame.
 - **Adaptive resolution**: the stage drops the pixel ratio in 0.25 steps when frames take > 26 ms
   (`adaptive: false` to disable); touch devices cap DPR at 1.5.
-- **Memory**: `keepGrid: false` frees the voxel grid after meshing (picking still works; `rebuild` doesn't).
+- **Memory**: once on the GPU, voxel meshes drop their JS-side vertex/index arrays (~100 bytes a quad) —
+  picking walks the grid instead. `keepGrid: false` frees the grid instead (the meshes then keep their
+  arrays for picking; `rebuild` doesn't work).
 - **Bakes** run per cluster inside the workers (AO) and only over lit regions (emissive light).
 - Measure with `?debug` (fps, draw calls, triangles overlay) and the `stats` line shot.mjs prints.
   SwiftShader in the container is ~50× slower than a GPU: judge fps on a real device; judge cost by

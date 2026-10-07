@@ -61,6 +61,11 @@ export class Stage {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.style.cssText = 'display:block;width:100%;height:100%;touch-action:none;outline:none';
     el.appendChild(this.renderer.domElement);
+    // voxel meshes drop their JS arrays once uploaded (releaseArrays): after a lost context, re-mesh from the grids
+    this.renderer.domElement.addEventListener('webglcontextrestored', () => {
+      for (const m of this.models) if (m.grid) this._mesh(m);
+      this.shadows.dispose(); this.invalidate();
+    });
     const coarse = window.matchMedia?.('(pointer: coarse)').matches; // phones/tablets: cap a bit lower
     this.maxDpr = Number(params.get('dpr')) || opts.pixelRatio || Math.min(window.devicePixelRatio || 1, coarse ? 1.5 : 2);
     this.dpr = this.maxDpr;
@@ -341,6 +346,9 @@ export class Stage {
       transparent: results.some((r) => r.transparent) ? createVoxelMaterial({ uniforms, light, transparent: true, transmission: this.look.water.transmission, refraction: this.post.refr, hooks }) : null,
     };
     model.materials = mats;
+    // the GPU has the geometry after its first draw; while the model keeps its grid (picking walks the
+    // voxels, a lost GL context re-meshes from it) the JS copies of the vertex/index arrays can go
+    for (const res of results) for (const geo of [res.solid, res.transparent]) if (geo) releaseArrays(geo, model);
     // [material]: three draws geometry.groups, which face culling (cull.js) points at the visible directions
     // instances are drawn in rotation classes (0/90/180/270° about Y): within a class every copy's faces
     // point the same way, so face culling works for instances too (cull.js). Any other rotation → 'free'.
@@ -432,9 +440,28 @@ export class Stage {
     const ndc = new THREE.Vector2(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
     const ray = new THREE.Raycaster();
     ray.setFromCamera(ndc, this.camera);
+    let best = null;
+    // models with their grid: walk the voxels (the meshes drop their CPU-side arrays once on the GPU)
+    for (const model of this.models) {
+      if (!model.grid || !isShown(model.group)) continue;
+      const base = model.inner.matrixWorld;
+      (model.instances ?? [null]).forEach((im, instance) => {
+        const inv = (im ? base.clone().multiply(im) : base.clone()).invert();
+        const o = ray.ray.origin.clone().applyMatrix4(inv);
+        const d = ray.ray.origin.clone().add(ray.ray.direction).applyMatrix4(inv).sub(o); // local units per world unit
+        const hit = voxelRay(model.grid, o, d);
+        if (hit && (!best || hit.t < best.t)) best = { ...hit, model, instance: im ? instance : null };
+      });
+    }
+    // grid freed (keepGrid: false): raycast those meshes (they keep their arrays)
     const owner = new Map();
-    for (const m of this.models) for (const mesh of m.meshes) owner.set(mesh, m);
-    const hit = ray.intersectObjects([...owner.keys()], false)[0];
+    for (const m of this.models) if (!m.grid) for (const mesh of m.meshes) owner.set(mesh, m);
+    const hit = owner.size ? ray.intersectObjects([...owner.keys()], false)[0] : null;
+    if (best && (!hit || best.t <= hit.distance)) {
+      const { model, voxel, normal, t, instance } = best;
+      const id = model.grid.get(...voxel);
+      return { model, group: model.group, voxel, id, name: model.palette.defs[id]?.name ?? null, normal, point: ray.ray.at(t, new THREE.Vector3()), instance };
+    }
     if (!hit) return null;
     const model = owner.get(hit.object);
     const M = hit.object.matrixWorld.clone();
@@ -444,7 +471,7 @@ export class Stage {
     const n = hit.face.normal;
     const voxel = [Math.floor(local.x - n.x * 0.5), Math.floor(local.y - n.y * 0.5), Math.floor(local.z - n.z * 0.5)];
     const info = hit.object.geometry.attributes.aInfo;
-    const id = model.grid ? model.grid.get(...voxel) : info.getX(hit.face.a) + info.getY(hit.face.a) * 256;
+    const id = info.getX(hit.face.a) + info.getY(hit.face.a) * 256;
     return { model, group: model.group, voxel, id, name: model.palette.defs[id]?.name ?? null, normal: [n.x, n.y, n.z], point: hit.point, instance };
   }
 
@@ -1241,6 +1268,53 @@ function instanceMatrix(it) {
 }
 
 const _view = new THREE.Vector3();
+
+// first filled voxel along o + t·d (grid coords; t in the caller's units) → { voxel, normal, t } | null
+function voxelRay(grid, o, d) {
+  const b = grid.bounds();
+  if (!b) return null;
+  let t0 = 0, t1 = Infinity, enter = -1;
+  for (let a = 0; a < 3; a++) {
+    const lo = b.min[a], hi = b.max[a] + 1, oa = o.getComponent(a), da = d.getComponent(a);
+    if (Math.abs(da) < 1e-12) { if (oa < lo || oa > hi) return null; continue; }
+    let ta = (lo - oa) / da, tb = (hi - oa) / da;
+    if (ta > tb) [ta, tb] = [tb, ta];
+    if (ta > t0) { t0 = ta; enter = a; }
+    t1 = Math.min(t1, tb);
+    if (t0 > t1) return null;
+  }
+  // Amanatides–Woo grid walk
+  const cell = [0, 0, 0], step = [0, 0, 0], tMax = [0, 0, 0], tDelta = [0, 0, 0];
+  for (let a = 0; a < 3; a++) {
+    const da = d.getComponent(a), pa = o.getComponent(a);
+    cell[a] = Math.min(b.max[a], Math.max(b.min[a], Math.floor(pa + da * (t0 + 1e-7))));
+    step[a] = da > 0 ? 1 : da < 0 ? -1 : 0;
+    tDelta[a] = step[a] ? Math.abs(1 / da) : Infinity;
+    tMax[a] = step[a] ? ((da > 0 ? cell[a] + 1 : cell[a]) - pa) / da : Infinity;
+  }
+  let normal = [0, 0, 0], t = t0;
+  if (enter >= 0) normal[enter] = -step[enter];
+  for (let i = 0, n = b.size[0] + b.size[1] + b.size[2] + 3; i < n; i++) {
+    if (grid.get(cell[0], cell[1], cell[2])) return { voxel: [...cell], normal, t };
+    const a = tMax[0] < tMax[1] ? (tMax[0] < tMax[2] ? 0 : 2) : tMax[1] < tMax[2] ? 1 : 2;
+    t = tMax[a];
+    if (t > t1) return null;
+    cell[a] += step[a]; tMax[a] += tDelta[a];
+    normal = [0, 0, 0]; normal[a] = -step[a];
+  }
+  return null;
+}
+
+// drop a geometry's JS-side arrays after upload, while the model still has its grid at that point
+function releaseArrays(geo, model) {
+  const done = new Set();
+  for (const attr of [...Object.values(geo.attributes), geo.index]) {
+    const buf = attr?.isInterleavedBufferAttribute ? attr.data : attr;
+    if (!buf || done.has(buf)) continue;
+    done.add(buf);
+    buf.onUpload(function () { if (model.grid) this.array = null; });
+  }
+}
 
 function isShown(o) {
   for (let p = o; p; p = p.parent) if (!p.visible) return false;

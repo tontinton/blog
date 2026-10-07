@@ -160,7 +160,7 @@ const stage = new Stage({
 | `progress(text, fraction)` | async: update loader, yield a frame (await between heavy steps) |
 | `setLook(spec)` / `updateLook(patch)` | live look change (deep-merged) |
 | `setView({ yaw, pitch, zoom, target })` | |
-| `pick(clientX, clientY)` → `{ voxel, id, name, normal, point, group, model, instance }` \| null | voxel under the pointer |
+| `pick(clientX, clientY)` → `{ voxel, id, name, normal, point, group, model, instance }` \| null | voxel under the pointer (a ray walk through the grid; meshes of `keepGrid: false` models are raycast) |
 | `start()` → Promise | first frame + loop; sets `window.VOXEL.ready` |
 | `captureViews(n, jpeg)` → dataURL | n yaw-rotated views tiled |
 | `stats()` | voxels, quads, mesh/bake ms, draw calls, bounds, `cache` (last frame's mode, redrawn fraction) |
