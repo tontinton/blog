@@ -46,9 +46,9 @@ export const MATERIALS = {
   wfCheek: { color: '#f0a3a0', jitter: 0.01 },
   wfLip: { color: '#c06a6a', jitter: 0.01 },
   wfBrow: { color: '#b37c4a', jitter: 0.02 },
-  wfEye: { ao: 0.35, color: '#2e211d', roughness: 0.25, jitter: 0 },
-  wfEyeTop: { ao: 0.35, color: '#5a4232', roughness: 0.25, jitter: 0 },
-  wfEyeMid: { ao: 0.35, color: '#2e211d', roughness: 0.25, jitter: 0 },
+  wfEye: { ao: 0.35, color: '#2f6fb8', roughness: 0.25, jitter: 0 },          // blue iris
+  wfEyeTop: { ao: 0.35, color: '#5e9ad8', roughness: 0.25, jitter: 0 },       // lighter blue lower iris
+  wfEyeMid: { ao: 0.35, color: '#1c2430', roughness: 0.25, jitter: 0 },       // pupil
   wfEyeHi: { ao: 0.35, color: '#fbf6f0', roughness: 0.2, jitter: 0 },
   wfLash: { color: '#2a1c18', jitter: 0 },
   wfHair: { color: '#d8954a', jitter: 0.04 },
