@@ -232,7 +232,7 @@ export class Actors {
       const rows = Math.ceil((cap * stride) / 1024);
       const rigTex = new THREE.DataTexture(new Float32Array(1024 * rows * 4), 1024, rows, THREE.RGBAFormat, THREE.FloatType);
       rigTex.magFilter = rigTex.minFilter = THREE.NearestFilter;
-      const uniforms = { ...stage.uniforms, uMat: { value: rg.palette.texture() }, uRig: { value: rigTex }, uRigStride: { value: stride } };
+      const uniforms = { ...stage.uniforms, uMat: { value: rg.palette.texture() }, ...(stage.ibl?.uniformsFor(rg.palette) ?? {}), uRig: { value: rigTex }, uRigStride: { value: stride } };
       const mat = createVoxelMaterial({ uniforms, rig: true }), depth = createVoxelDepthMaterial({ uniforms, rig: true });
       const m = new THREE.InstancedMesh(mergeParts(rg), mat, cap);
       m.count = Math.ceil((n - v) / nv);
@@ -424,7 +424,6 @@ export class Actors {
     for (const ag of this.agents) this._pose(ag, t);
     for (const s of this.sets) { s.mesh.instanceMatrix.needsUpdate = true; s.rigTex.needsUpdate = true; s.uniforms.uMat.value = s.rig.palette.texture(); }
     if (this.blob) this.blob.instanceMatrix.needsUpdate = true;
-    if (this.shadow === true && (this.stage.look?.sun?.update ?? 'always') !== 'always') this.stage._shadowDirty = true;
   }
 
   _pose(ag, t) {

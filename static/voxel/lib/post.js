@@ -3,6 +3,12 @@
 //
 //   scene (HDR, MSAA, depth) → [DOF / tilt-shift] → bloom mip chain → composite → screen
 //
+// The scene target persists between frames, so the stage can redraw just the pixels that changed
+// (renderScene with rects). Two extra layers are composited on read (sceneTex() in the shaders):
+//   light layers  — the scene lit by one flickering light only, at intensity 1; the composite adds
+//                   factor × layer, so a light whose brightness/color animates costs no scene redraw
+//   particles     — GPU particles drawn over a copy of the scene depth into their own target each frame
+//
 // The composite draws the background (solid / gradient / radial, in display sRGB so the colors you
 // pick are the colors you get), tone-maps the geometry, adds bloom (HDR inside geometry, screen-blended
 // over the background), depth fog that fades into the background, color grading, vignette, chromatic
@@ -19,11 +25,72 @@ function fsMaterial(fragmentShader, uniforms, defines = {}) {
   return new THREE.ShaderMaterial({ vertexShader: FSQ_VERT, fragmentShader, uniforms, defines, depthTest: false, depthWrite: false, toneMapped: false });
 }
 
+export const MAX_LIGHT_LAYERS = 4;
+// scene color = cached scene + Σ factor × light layer, then particles over it (premultiplied "over")
+const SCENE_TEX = /* glsl */ `
+uniform sampler2D tScene;
+#if VX_LAYERS > 0
+uniform sampler2D tLayer0; uniform vec3 uLayerK[4];
+#endif
+#if VX_LAYERS > 1
+uniform sampler2D tLayer1;
+#endif
+#if VX_LAYERS > 2
+uniform sampler2D tLayer2;
+#endif
+#if VX_LAYERS > 3
+uniform sampler2D tLayer3;
+#endif
+#if VX_PARTICLES
+uniform sampler2D tParticles;
+#endif
+vec4 sceneTex(vec2 uv) {
+  vec4 s = texture2D(tScene, uv);
+  #if VX_LAYERS > 0
+  s.rgb += uLayerK[0] * texture2D(tLayer0, uv).rgb;
+  #endif
+  #if VX_LAYERS > 1
+  s.rgb += uLayerK[1] * texture2D(tLayer1, uv).rgb;
+  #endif
+  #if VX_LAYERS > 2
+  s.rgb += uLayerK[2] * texture2D(tLayer2, uv).rgb;
+  #endif
+  #if VX_LAYERS > 3
+  s.rgb += uLayerK[3] * texture2D(tLayer3, uv).rgb;
+  #endif
+  #if VX_PARTICLES
+  vec4 p = texture2D(tParticles, uv);
+  s = s * (1.0 - p.a) + p;
+  #endif
+  return s;
+}
+`;
+const COPY = /* glsl */ `
+uniform sampler2D tSrc; varying vec2 vUv;
+void main() { gl_FragColor = texture2D(tSrc, vUv); }`;
+const DIFF = /* glsl */ `
+uniform sampler2D tSrc; uniform sampler2D tBase; uniform float uInvStep; varying vec2 vUv;
+void main() { gl_FragColor = vec4((texture2D(tSrc, vUv).rgb - texture2D(tBase, vUv).rgb) * uInvStep, 0.0); }`;
+const MERGE = /* glsl */ `
+${SCENE_TEX}
+varying vec2 vUv;
+void main() { gl_FragColor = sceneTex(vUv); }`;
+const DEPTH_COPY = /* glsl */ `
+uniform sampler2D tDepth; varying vec2 vUv;
+void main() { gl_FragDepth = texture2D(tDepth, vUv).r; }`;
+
 const BLOOM_DOWN = /* glsl */ `
-uniform sampler2D tSrc; uniform vec2 uTexel; uniform vec4 uThresh; // threshold, knee, prefilter on, clamp
+uniform vec2 uTexel; uniform vec4 uThresh; // threshold, knee, prefilter on, clamp
+#if VX_SCENE
+${SCENE_TEX}
+#define SRC(uv) sceneTex(uv)
+#else
+uniform sampler2D tSrc;
+#define SRC(uv) texture2D(tSrc, uv)
+#endif
 varying vec2 vUv;
 vec3 tap(vec2 o) {
-  vec3 c = texture2D(tSrc, vUv + o * uTexel).rgb;
+  vec3 c = SRC(vUv + o * uTexel).rgb;
   return any(isnan(c)) || any(isinf(c)) ? vec3(0.0) : clamp(c, 0.0, 1024.0); // a NaN/Inf texel would spread through every mip
 }
 float karis(vec3 c) { return 1.0 / (1.0 + max(c.r, max(c.g, c.b))); }
@@ -117,7 +184,8 @@ void main() {
 
 const COMPOSITE = /* glsl */ `
 #include <tonemapping_pars_fragment>
-uniform sampler2D tScene; uniform sampler2D tBloom; uniform sampler2D tDepth;
+${SCENE_TEX}
+uniform sampler2D tBloom; uniform sampler2D tDepth;
 uniform vec2 uRes; uniform float uTime;
 uniform float uExposure; uniform int uTone;
 uniform vec4 uBgA; // type (0 solid, 1 linear, 2 radial), angle | cx, cy, radius
@@ -191,10 +259,10 @@ vec3 grade(vec3 c) {
 }
 void main() {
   vec2 uv = vUv;
-  vec4 s = texture2D(tScene, uv);
+  vec4 s = sceneTex(uv);
   if (uFx.y > 0.0) {
     vec2 d = (uv - 0.5) * uFx.y * 0.01;
-    s.r = texture2D(tScene, uv - d).r; s.b = texture2D(tScene, uv + d).b;
+    s.r = sceneTex(uv - d).r; s.b = sceneTex(uv + d).b;
   }
   float a = isnan(s.a) ? 0.0 : clamp(s.a, 0.0, 1.0);
   vec3 c = a > 1e-4 ? s.rgb / a : vec3(0.0);
@@ -274,15 +342,27 @@ export class Post {
     this.levels = 6;
     this.scene = this._makeSceneTarget(1, 1);
     this.dofTarget = this._rt(1, 1);
+    this.mergeTarget = null;    // composed scene for DOF (lazy)
+    this.layerTargets = [];     // light layers (lazy)
+    this.particleTarget = null; // lazy
+    this.layers = 0;            // light layers composited this frame (stage.setComposition)
+    this.particles = false;     // particle layer composited this frame
     this.down = []; this.up = [];
     for (let i = 0; i < this.levels; i++) { this.down.push(this._rt(1, 1)); this.up.push(this._rt(1, 1)); }
-    this.mDown = fsMaterial(BLOOM_DOWN, { tSrc: { value: null }, uTexel: { value: new THREE.Vector2() }, uThresh: { value: new THREE.Vector4(1, 0.5, 0, 32) } });
+    // sources of sceneTex(): shared by the composite, the first bloom pass and the DOF merge
+    this.su = {
+      tScene: { value: null }, tParticles: { value: null },
+      tLayer0: { value: null }, tLayer1: { value: null }, tLayer2: { value: null }, tLayer3: { value: null },
+      uLayerK: { value: [new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3(), new THREE.Vector3()] },
+    };
+    this.mDown = fsMaterial(BLOOM_DOWN, { tSrc: { value: null }, uTexel: { value: new THREE.Vector2() }, uThresh: { value: new THREE.Vector4(1, 0.5, 0, 32) } }, { VX_SCENE: 0 });
     this.mUp = fsMaterial(BLOOM_UP, { tLow: { value: null }, tHigh: { value: null }, uTexel: { value: new THREE.Vector2() }, uRadius: { value: 0.85 } });
     const cam = { uCam: { value: new THREE.Vector2(0.1, 100) }, uOrtho: { value: 0 } };
     this.cam = cam;
     this.mDof = fsMaterial(DOF, { tSrc: { value: null }, tDepth: { value: null }, uRes: { value: new THREE.Vector2() }, uDof: { value: new THREE.Vector4() }, uDof2: { value: new THREE.Vector4() }, ...cam }, { DOF_SAMPLES: 48 });
     this.u = {
-      tScene: { value: null }, tBloom: { value: null }, tDepth: { value: null }, toneMappingExposure: { value: 1 },
+      ...this.su,
+      tBloom: { value: null }, tDepth: { value: null }, toneMappingExposure: { value: 1 },
       uRes: { value: new THREE.Vector2() }, uTime: { value: 0 }, uExposure: { value: 1 }, uTone: { value: 2 },
       uBgA: { value: new THREE.Vector4() }, uBgB: { value: new THREE.Vector4(1, 0.5, 0, 0) },
       uBg0: { value: new THREE.Color() }, uBg1: { value: new THREE.Color() }, uBg2: { value: new THREE.Color() },
@@ -295,7 +375,24 @@ export class Post {
       uStars: { value: new THREE.Vector4() }, uDisc: { value: new THREE.Vector4() }, uDiscColor: { value: new THREE.Color() }, uOutline: { value: new THREE.Vector4() }, uOutlineColor: { value: new THREE.Color() },
       ...cam,
     };
-    this.mComp = fsMaterial(COMPOSITE, this.u);
+    this.variants = new Map();
+    this.mCopy = fsMaterial(COPY, { tSrc: { value: null } });
+    this.mDiff = fsMaterial(DIFF, { tSrc: { value: null }, tBase: { value: null }, uInvStep: { value: 1 } });
+    this.mDepthCopy = new THREE.ShaderMaterial({ vertexShader: FSQ_VERT, fragmentShader: DEPTH_COPY, uniforms: { tDepth: { value: null } }, depthTest: true, depthWrite: true, depthFunc: THREE.AlwaysDepth, colorWrite: false });
+  }
+
+  // composite / first bloom pass / DOF merge, compiled per (light layers, particles) combination
+  _variant(kind, layers, particles) {
+    const key = `${kind}|${layers}|${particles ? 1 : 0}`;
+    let m = this.variants.get(key);
+    if (!m) {
+      const defines = { VX_LAYERS: layers, VX_PARTICLES: particles ? 1 : 0, VX_SCENE: 1 };
+      m = kind === 'comp' ? fsMaterial(COMPOSITE, this.u, defines)
+        : kind === 'down' ? fsMaterial(BLOOM_DOWN, { ...this.mDown.uniforms, ...this.su }, defines)
+          : fsMaterial(MERGE, this.su, defines);
+      this.variants.set(key, m);
+    }
+    return m;
   }
 
   _rt(w, h) {
@@ -311,8 +408,7 @@ export class Post {
     w = Math.max(1, Math.round(w)); h = Math.max(1, Math.round(h));
     if (w === this.w && h === this.h) return;
     this.w = w; this.h = h;
-    this.scene.setSize(w, h);
-    this.dofTarget.setSize(w, h);
+    for (const t of [this.scene, this.dofTarget, this.mergeTarget, this.particleTarget, ...this.layerTargets]) t?.setSize(w, h);
     let bw = Math.max(1, w >> 1), bh = Math.max(1, h >> 1);
     for (let i = 0; i < this.levels; i++) {
       this.down[i].setSize(bw, bh); this.up[i].setSize(bw, bh);
@@ -328,8 +424,70 @@ export class Post {
     this.quad.render(this.renderer);
   }
 
-  /** Apply a resolved `look` (see looks.js) to the uniforms. Cheap; call when the look changes. */
-  applyLook(L) {
+  // run fn with target's scissor (+ viewport) limited to rect q ({ x, y, w, h }, pixels, bottom-left origin)
+  _scissored(target, q, fn, viewport = false) {
+    if (!q) return fn();
+    target.scissorTest = true; target.scissor.set(q.x, q.y, q.w, q.h);
+    if (viewport) target.viewport.set(q.x, q.y, q.w, q.h);
+    try { return fn(); } finally {
+      target.scissorTest = false; target.scissor.set(0, 0, target.width, target.height); target.viewport.set(0, 0, target.width, target.height);
+    }
+  }
+
+  /**
+   * Draw the scene into the HDR MSAA target. rects: null = the whole frame; [{ x, y, w, h }] = only those
+   * pixels (everything else keeps what the target held), each through a sub-frustum camera
+   * (setViewOffset) so three frustum-culls the clusters outside the rect.
+   */
+  renderScene(scene, camera, rects = null) {
+    const r = this.renderer, rt = this.scene;
+    const prevClear = r.getClearColor(_c), prevAlpha = r.getClearAlpha();
+    r.setClearColor(0x000000, 0);
+    if (!rects) {
+      r.setRenderTarget(rt);
+      r.render(scene, camera);
+      this.sceneInfo = { calls: r.info.render.calls, triangles: r.info.render.triangles }; // before post passes reset it
+    } else {
+      for (const q of rects) this._scissored(rt, q, () => {
+        camera.setViewOffset(this.w, this.h, q.x, this.h - q.y - q.h, q.w, q.h);
+        try { r.setRenderTarget(rt); r.render(scene, camera); } finally { camera.clearViewOffset(); }
+      }, true);
+    }
+    r.setClearColor(prevClear, prevAlpha);
+  }
+
+  /** Copy the scene target's (resolved) color into light layer i (rects: only those pixels). */
+  copyLayer(i, rects = null) {
+    const t = (this.layerTargets[i] ??= this._rt(this.w, this.h));
+    this.mCopy.uniforms.tSrc.value = this.scene.texture;
+    for (const q of rects ?? [null]) this._scissored(t, q, () => this._pass(this.mCopy, t));
+  }
+
+  /** Light layer i = (scene target − layer base) / step: a finite-difference derivative (moving lights). */
+  diffLayer(i, base, step, rects = null) {
+    const t = (this.layerTargets[i] ??= this._rt(this.w, this.h));
+    const u = this.mDiff.uniforms;
+    u.tSrc.value = this.scene.texture; u.tBase.value = this.layerTargets[base].texture; u.uInvStep.value = 1 / step;
+    for (const q of rects ?? [null]) this._scissored(t, q, () => this._pass(this.mDiff, t));
+  }
+
+  /**
+   * Draw the objects on `layer` (particles) into their own MSAA target over a copy of the scene depth, so
+   * the scene underneath can stay cached. Lights must be on `layer` too.
+   */
+  renderParticles(scene, camera, layer) {
+    const r = this.renderer;
+    const t = (this.particleTarget ??= this._makeSceneTarget(this.w, this.h));
+    const prevClear = r.getClearColor(_c), prevAlpha = r.getClearAlpha(), ac = r.autoClear, mask = camera.layers.mask;
+    r.setClearColor(0x000000, 0);
+    this.mDepthCopy.uniforms.tDepth.value = this.scene.depthTexture;
+    this._pass(this.mDepthCopy, t); // clears, then writes the scene depth
+    r.autoClear = false;
+    camera.layers.set(layer);
+    try { r.render(scene, camera); } finally { camera.layers.mask = mask; r.autoClear = ac; r.setClearColor(prevClear, prevAlpha); }
+  }
+
+  /** Apply a resolved `look` (see looks.js) to the uniforms. Cheap; call when the look changes. */  applyLook(L) {
     const u = this.u;
     u.uExposure.value = L.exposure;
     u.uTone.value = TONE[L.toneMapping] ?? 2;
@@ -364,25 +522,38 @@ export class Post {
     this.look = L;
   }
 
-  /** Render scene through the pipeline to the screen (or `target`). */
-  render(scene, camera, { time = 0, fog = null, dof = null, radius = 10 } = {}) {
-    this.u.uOutline.value.y = radius;
-    const r = this.renderer, L = this.look;
-    const prevClear = r.getClearColor(new THREE.Color()), prevAlpha = r.getClearAlpha();
-    r.setClearColor(0x000000, 0);
-    r.setRenderTarget(this.scene);
-    r.clear(true, true, true);
-    r.render(scene, camera);
-    this.sceneInfo = { calls: r.info.render.calls, triangles: r.info.render.triangles }; // before post passes reset it
-    r.setClearColor(prevClear, prevAlpha);
+  /** Whole pipeline in one go: the full scene, then post (no layers). */
+  render(scene, camera, opts = {}) {
+    this.renderScene(scene, camera);
+    this.layers = 0; this.particles = false;
+    this.finish(camera, opts);
+  }
 
+  /**
+   * Post-process what renderScene/copyLayer/renderParticles left (this.layers light layers with factors in
+   * su.uLayerK, this.particles) and draw it to the screen.
+   */
+  finish(camera, { time = 0, fog = null, dof = null, radius = 10 } = {}) {
+    this.u.uOutline.value.y = radius;
+    const L = this.look, su = this.su;
+    const layers = this.layers, particles = this.particles && !!this.particleTarget;
+    su.tScene.value = this.scene.texture;
+    for (let i = 0; i < 4; i++) su[`tLayer${i}`].value = i < layers ? this.layerTargets[i].texture : null;
+    su.tParticles.value = particles ? this.particleTarget.texture : null;
+    const depth = particles ? this.particleTarget.depthTexture : this.scene.depthTexture;
     this.cam.uCam.value.set(camera.near, camera.far);
     this.cam.uOrtho.value = camera.isOrthographicCamera ? 1 : 0;
-    let color = this.scene.texture;
+    let color = null; // null → the composed scene (sceneTex), read directly by the first bloom pass + composite
     // DOF
     if (dof) {
+      let src = this.scene.texture;
+      if (layers || particles) {
+        this.mergeTarget ??= this._rt(this.w, this.h);
+        this._pass(this._variant('merge', layers, particles), this.mergeTarget);
+        src = this.mergeTarget.texture;
+      }
       const m = this.mDof.uniforms;
-      m.tSrc.value = color; m.tDepth.value = this.scene.depthTexture;
+      m.tSrc.value = src; m.tDepth.value = depth;
       m.uDof.value.set(dof.mode, dof.focus, dof.range, dof.maxBlur);
       m.uDof2.value.set(dof.angle ?? 0, dof.band ?? 0, dof.bokeh ?? 0.6, 0);
       this._pass(this.mDof, this.dofTarget);
@@ -395,11 +566,12 @@ export class Post {
       const levels = Math.max(1, Math.min(this.levels, L.bloom.levels ?? this.levels));
       for (let i = 0; i < levels; i++) {
         const d = this.mDown.uniforms;
+        const first = i === 0;
         d.tSrc.value = src;
-        const img = src === color ? { width: this.w, height: this.h } : this.down[i - 1];
+        const img = first ? { width: this.w, height: this.h } : this.down[i - 1];
         d.uTexel.value.set(1 / img.width, 1 / img.height);
-        d.uThresh.value.z = i === 0 ? 1 : 0;
-        this._pass(this.mDown, this.down[i]);
+        d.uThresh.value.z = first ? 1 : 0;
+        this._pass(first && !color ? this._variant('down', layers, particles) : this.mDown, this.down[i]);
         src = this.down[i].texture;
       }
       let low = this.down[levels - 1].texture;
@@ -415,21 +587,22 @@ export class Post {
       this.u.tBloom.value = blackTex();
     }
     // composite
-    this.u.tScene.value = color;
-    this.u.tDepth.value = this.scene.depthTexture;
+    if (color) su.tScene.value = color;
+    this.u.tDepth.value = depth;
     this.u.uTime.value = time;
     if (fog) this.u.uFog.value.set(fog.near, fog.far, fog.amount, L.fog.color ? 1 : 0);
     else this.u.uFog.value.z = 0;
-    this._pass(this.mComp, null);
+    this._pass(color ? this._variant('comp', 0, false) : this._variant('comp', layers, particles), null);
   }
 
   dispose() {
-    [this.scene, this.dofTarget, ...this.down, ...this.up].forEach((t) => t.dispose());
-    [this.mDown, this.mUp, this.mDof, this.mComp].forEach((m) => m.dispose());
+    [this.scene, this.dofTarget, this.mergeTarget, this.particleTarget, ...this.layerTargets, ...this.down, ...this.up].forEach((t) => t?.dispose());
+    [this.mDown, this.mUp, this.mDof, this.mCopy, this.mDiff, this.mDepthCopy, ...this.variants.values()].forEach((m) => m.dispose());
     this.quad.dispose();
   }
 }
 
+const _c = new THREE.Color();
 let _black = null;
 function blackTex() {
   if (!_black) { _black = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1); _black.needsUpdate = true; }

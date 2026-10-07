@@ -110,6 +110,15 @@ Zola also serves `static/` as-is (`zola serve` → `/voxel/<slug>/`), but lab sc
 
 ## Performance checks
 `stats()` in shot output, or `?debug` fps in a real browser. Mesh time ≈ 2 ms per 32³ chunk + bakes.
+
+Frame cost: `node bench.mjs /voxel/<slug>/ [/voxel/_lab/?scene=neon …] [--moving] [--json a.json] [--base a.json]`
+renders uncapped GPU-synced frames and prints median ms (frame / cpu / scene pass / shadow / post), how the
+frames were drawn (`full`, `partial` + % of pixels redrawn, `post`, `skip`) and the light layers in use.
+Headless numbers come from SwiftShader (CPU): use them for A/B comparisons, not absolute fps — it also
+executes both sides of shader branches, so branchy GPU wins (the flat-face IBL table) don't show there.
+In a real browser `?bench` logs the same numbers to the console; `?nocache` turns incremental rendering off
+for comparison. Where the time goes (architecture notes below): the main scene pass (fragment shading —
+IBL, shadows, per-voxel color/noise), then the shadow pass, then post.
 Node can mesh too (no WebGL needed) for quick profiling:
 ```js
 import { VoxelGrid, Palette, buildMesh } from '/abs/path/static/voxel/lib/index.js';
@@ -146,4 +155,10 @@ MeshStandard/Physical chunks by string — if you bump three, run a lab shot and
   fog, tone map, grade, vignette, grain) in display space. Alpha = geometry coverage; the ground plane
   writes only shadow/contact/reflection alpha.
 - `stage.js`: camera fit (`_layout`), shadow camera fit, ground contact texture (CPU footprint blur),
-  reflection pass, loop, capture.
+  reflection pass, loop (sleeps when nothing can change), capture. `_render`: plan (cache.js) → shadows →
+  IBL tables → reflection → face culling → scene (full / rects / light layers) → particle layer → post.
+- `cache.js`: change detection + dirty rectangles + light layers (see api.md "Render cache").
+- `shadows.js`: sun shadow map with a static-caster cache (hooks `renderer.shadowMap.render`).
+- `cull.js`: per-direction draw groups (the mesher sorts quads into 12 direction × still/sway buckets,
+  front-to-back inside each; meshes use `[material]` + `geometry.groups`).
+- `ibl.js`: per-palette table of env lookups for flat faces (ortho camera), read by the voxel shader.

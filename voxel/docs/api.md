@@ -139,6 +139,7 @@ const stage = new Stage({
   pixelRatio (max, default min(devicePixelRatio, 2)), adaptive: true (drop resolution when slow), msaa (4; 2 on hi-dpi), container, shotTime,
   fps: { max: 60, idle: 30, idleAfter: 3 } (frame pacing: cap on fast screens, drop to `idle` fps when the camera hasn't moved for
   `idleAfter` s — keeps laptops cool; `?fps=N` forces a rate),
+  cache: true (incremental rendering, below; false = redraw everything every frame, like `?nocache`),
 });
 ```
 
@@ -162,7 +163,9 @@ const stage = new Stage({
 | `pick(clientX, clientY)` → `{ voxel, id, name, normal, point, group, model, instance }` \| null | voxel under the pointer |
 | `start()` → Promise | first frame + loop; sets `window.VOXEL.ready` |
 | `captureViews(n, jpeg)` → dataURL | n yaw-rotated views tiled |
-| `stats()` | voxels, quads, mesh/bake ms, draw calls, bounds… |
+| `stats()` | voxels, quads, mesh/bake ms, draw calls, bounds, `cache` (last frame's mode, redrawn fraction) |
+| `invalidate()` | redraw everything next frame — after changing something the render cache can't see (below) |
+| `bench({ frames, moving })` | GPU-synced frame-cost medians: `{ frame, cpu, scene, shadow, post, modes, coverage }` (`?bench` logs them) |
 | `scene camera renderer controls sun fill ambient ground post` | the raw three.js objects — use freely |
 | `uniforms` | shared voxel uniforms: `uTime, uWind, uAO, uBevel, uLook, uWater, uSeed` (see material.js) |
 | `look`, `bounds` (Box3), `radius`, `time`, `fixedTime` (frozen clock or null) | |
@@ -172,11 +175,28 @@ toward the origin — the +z/+x sides of a scene are the front; tall things belo
 
 URL params every piece understands: `?debug` (tweak panel + stats overlay), `?look=name`,
 `?lookjson={…}`, `?t=seconds`, `?yaw= &pitch= &zoom=`, `?target=x,y,z` (close-ups), `?dpr=`, `?region=a,b`
-(world: build only those), `?shot` (used by shot.mjs).
+(world: build only those), `?shot` (used by shot.mjs), `?nocache` (no incremental rendering), `?bench` (log frame
+costs after load, at rest and orbiting).
+
+**Render cache** (`cache.js`). Every frame the stage works out what changed and draws only that:
+nothing → no GPU work at all (and the loop stops entirely when nothing *can* change: no actors, particles,
+`onUpdate`, wind, flicker, water or stars; input/resize/look changes wake it); only particles / a light's
+brightness → particle layer + post; small things moved (actors, animated models, flickering/swaying/
+rippling voxels, their sun shadows) → the scene is redrawn inside screen rectangles around them; the
+camera moved or too much changed → a full frame. A light whose intensity/color animates (a flickering
+fire, a day cycle) becomes a *light layer*: drawn once alone at intensity 1 and added back by the composite,
+so it costs nothing per frame; a shadowless point/spot light that also jiggles within ~1.5 voxels gets 3
+gradient layers (first-order position change). What it detects on its own: camera, size, look,
+`stage.uniforms`, environment, models/objects added/removed/moved/hidden, palette edits, lights, actors,
+particles. What it can't: your own hook uniforms (models with hook uniforms or `uTime` are redrawn every
+frame anyway) and materials/uniforms of objects you added yourself — call `stage.invalidate()` after those.
+Big always-moving areas (wind through a forest, its shadows) fall back to full frames: that's real change.
 
 Animating lighting every frame: change `stage.sun.intensity/color/position`, `stage.scene.environmentIntensity`,
 `stage.uniforms.uLook.value.x` (emissive multiplier) directly — `updateLook` rebuilds the environment and
 shadow map when sky/sun change, too heavy per frame. Animating objects: transform the group returned by `add`.
+Cheapest: animate a light's `intensity`/`color` (a light layer, free per frame) and keep its position still or
+within a voxel or so; moving the sun or `environmentIntensity` redraws everything.
 
 **GLSL hooks** (`stage.add(g, { hooks })`, see `material.js` header): `uniforms`, `vertexPars`,
 `fragmentPars`, `vertex` (edit `transformed`, object space), `color` (edit `col` per voxel), `emissive`

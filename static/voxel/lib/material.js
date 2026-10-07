@@ -21,6 +21,7 @@
 // color+flicker, jitter/bevel/grid/ao), mc (material custom vec4), h (per-voxel hash), uTime, col.
 import * as THREE from './three.js';
 import { hashString } from './random.js';
+import { iblChunk } from './ibl.js';
 
 export const GLSL_COMMON = /* glsl */ `
 uniform sampler2D uMat;
@@ -328,6 +329,7 @@ vVLight = aLight.rgb;
 export function createVoxelMaterial(opts) {
   const { uniforms, light, transparent, hooks } = opts;
   const transmission = transparent && opts.transmission !== false;
+  const ibl = !!uniforms.uIbl; // precomputed flat-face IBL (ibl.js)
   const mat = transparent
     ? new THREE.MeshPhysicalMaterial({ roughness: 1, metalness: 0, transmission: transmission ? 1 : 0, thickness: 1.5, ior: 1.33, transparent: !transmission, opacity: 1, depthWrite: true, specularIntensity: 1 })
     : new THREE.MeshStandardMaterial({ roughness: 1, metalness: 1 });
@@ -350,6 +352,7 @@ export function createVoxelMaterial(opts) {
       .replace('#include <roughnessmap_fragment>', 'float roughnessFactor = m1.x * roughness;')
       .replace('#include <metalnessmap_fragment>', 'float metalnessFactor = m1.y * metalness;')
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${FRAG_BEVEL}`)
+      .replace('#include <envmap_physical_pars_fragment>', ibl ? iblChunk(THREE.ShaderChunk.envmap_physical_pars_fragment) : '#include <envmap_physical_pars_fragment>')
       .replace('#include <emissivemap_fragment>', FRAG_EMISSIVE)
       .replace('#include <aomap_fragment>', FRAG_AO)
       .replace('#include <opaque_fragment>', '#include <opaque_fragment>\ngl_FragColor.rgb = vxSafe(gl_FragColor.rgb, diffuseColor.rgb * 0.5);\n/*VOXEL_OUTPUT_HOOK*/\ngl_FragColor.rgb = vxSafe(gl_FragColor.rgb, vec3(0.0));');
@@ -367,7 +370,7 @@ export function createVoxelMaterial(opts) {
     mat.userData.shader = shader;
   };
   const hk = hookKey(hooks);
-  mat.customProgramCacheKey = () => `voxel-${transparent ? (transmission ? 't' : 'a') : 's'}-${light ? 1 : 0}-${opts.rig ? 'r' : ''}-${hk}`;
+  mat.customProgramCacheKey = () => `voxel-${transparent ? (transmission ? 't' : 'a') : 's'}-${light ? 1 : 0}-${opts.rig ? 'r' : ''}-${ibl ? 'i' : ''}-${hk}`;
   return mat;
 }
 
@@ -378,6 +381,8 @@ export function createVoxelMaterial(opts) {
 export function createVoxelDepthMaterial(opts) {
   const { uniforms, hooks } = opts;
   const mat = opts.distance ? new THREE.MeshDistanceMaterial() : new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+  // PCF shadow maps sample the depth attachment; the packed color is never read — don't pay to write it
+  if (!opts.distance) mat.colorWrite = false;
   if (opts.rig) mat.defines = { ...(mat.defines ?? {}), VOXEL_RIG: 1 };
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);

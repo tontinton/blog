@@ -46,9 +46,10 @@ match `colors.at(-1)` so there's no flash (new.mjs does).
 `azimuth` (0 = from +z i.e. the default camera side, 90 = from +x), `elevation` (deg; low = long shadows),
 `shadow`, `softness` (PCF radius in texels, 1–4), `mapSize` (4096), `bias`, `normalBias`,
 `follow: true` keeps it fixed relative to the camera (lighting never changes while orbiting),
-`update: 'always'` (default: shadow map re-rendered every frame) | `'static'` (only when the scene changes —
-use for big worlds: millions of triangles are drawn once into the shadow map, not every frame; actors then
-get blob shadows) | `N` (every N frames: big world + a few moving shadow casters).
+`update: 'always'` (default) | `'static'` | `N`. Still geometry is always drawn into a cached shadow map
+once (shadows.js); per frame only the moving casters (actors, animated models, swaying leaves, lit particles)
+are redrawn on top of it. `'always'`: they update every frame; `N`: every N frames; `'static'`: swaying leaves
+keep their rest shadow (big forests) and actors get blob shadows; other movers still update.
 Tip: put the sun roughly behind the camera's shoulder (azimuth within ±60° of camera yaw) so the
 visible faces get light; side-light (±90°) is more dramatic.
 

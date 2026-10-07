@@ -133,6 +133,8 @@ stage.start();
   background color you pick is exactly what you see.
 
 - Actors read the terrain when created: call `stage.actors` after `stage.add` of the ground.
+- Rendering is incremental (only what changed is redrawn; nothing changed → no GPU work). Changed one of
+  your own uniforms or materials? Call `stage.invalidate()` (api.md "Render cache").
 
 More: [docs/api.md](docs/api.md) · [docs/looks.md](docs/looks.md) · [docs/cookbook.md](docs/cookbook.md) ·
 [docs/animation.md](docs/animation.md) · [docs/big-scenes.md](docs/big-scenes.md) · [docs/extending.md](docs/extending.md) ·

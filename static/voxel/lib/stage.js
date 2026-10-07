@@ -8,6 +8,11 @@
 //
 // URL params (handy while iterating): ?look=neon ?yaw=30 ?pitch=20 ?zoom=1.3 ?t=4 (freeze time)
 //   ?debug (live tweak panel + stats) ?shot (no UI, deterministic; used by voxel/tools/shot.mjs) ?dpr=1
+//   ?nocache (redraw everything every frame) ?bench (log frame costs, see bench())
+//
+// Rendering is incremental (cache.js): frames where nothing changed cost nothing, small changes redraw
+// only their screen rectangles, flickering lights are composited layers, and the loop sleeps entirely when
+// nothing can animate. Changed something the stage can't see (your own uniform/material)? stage.invalidate().
 import * as THREE from './three.js';
 import { buildMesh, geometryFromArrays } from './mesher.js';
 import { clusterChunks, clusterInputs } from './cluster.js';
@@ -18,6 +23,10 @@ import { runRegion, runAssets, mergeInto, loadPaletteDefs } from './world.js';
 import { combineHooks } from './registry.js';
 import { createVoxelUniforms, createVoxelMaterial, createVoxelDepthMaterial } from './material.js';
 import { Post } from './post.js';
+import { SunShadows } from './shadows.js';
+import { RenderCache, PARTICLE_LAYER, GRAD_STEP } from './cache.js';
+import { faceMask, setFaceGroups } from './cull.js';
+import { IblTable } from './ibl.js';
 import { resolveLook, merge } from './looks.js';
 import { rgb, srgbToLinear } from './color.js';
 import { Particles } from './particles.js';
@@ -57,6 +66,7 @@ export class Stage {
     this.dpr = this.maxDpr;
 
     this.scene = new THREE.Scene();
+    this.scene.matrixWorldAutoUpdate = false; // once per frame in _render, not once per render call (shadow, layers, rects…)
     this.root = new THREE.Group();
     this.scene.add(this.root);
     this.models = [];
@@ -75,6 +85,12 @@ export class Stage {
 
     // shared voxel uniforms (a model gets its own copy of uMat, the palette texture)
     this.uniforms = createVoxelUniforms({ texture: () => null });
+    this.shadows = new SunShadows(this);
+    this.ibl = new IblTable(this.renderer);
+    this.renderCache = new RenderCache(this);
+    this.cache = opts.cache !== false && !params.has('nocache');
+    this._sceneDirty = true;
+    this._reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 
     // camera
     const cam = (this.camOpts = merge({ type: 'ortho', fov: 28, yaw: 45, pitch: 32, zoom: 1, margin: 1.06, fit: 'view', target: null, controls: true, autoRotate: 0, idleRotate: 0, minPitch: 4, maxPitch: 88, minZoom: 0.6, maxZoom: 5, pan: false, damping: 0.08, offset: [0, 0] }, opts.camera ?? {}));
@@ -88,9 +104,9 @@ export class Stage {
       enableDamping: !this.shot, dampingFactor: cam.damping, enablePan: cam.pan, enabled: cam.controls && !this.shot,
       minPolarAngle: (90 - cam.maxPitch) * DEG, maxPolarAngle: (90 - cam.minPitch) * DEG, rotateSpeed: 0.6, zoomSpeed: 0.9,
     });
-    this.controls.addEventListener('start', () => { this._interacted = performance.now(); this.ui?.interacted(); });
+    this.controls.addEventListener('start', () => { this._interacted = performance.now(); this.ui?.interacted(); this.wake(); });
     this.controls.addEventListener('change', () => { this._active = performance.now(); });
-    this.controls.addEventListener('change', () => { this._dirty = true; });
+    this.controls.addEventListener('change', () => { this._dirty = true; this.wake(); });
 
     // lights
     this.sun = new THREE.DirectionalLight(0xffffff, 2);
@@ -100,6 +116,7 @@ export class Stage {
     this.scene.add(this.fill, this.fill.target);
     this.ambient = new THREE.AmbientLight(0xffffff, 0);
     this.scene.add(this.ambient);
+    for (const l of [this.sun, this.fill, this.ambient]) l.layers.enable(PARTICLE_LAYER); // lit particles
     this.pmrem = new THREE.PMREMGenerator(this.renderer);
 
     // ground (shadow catcher + contact shadow)
@@ -250,7 +267,7 @@ export class Stage {
     group.name = opts.name ?? 'voxels';
     const inner = new THREE.Group();
     group.add(inner);
-    const model = { group, inner, grid, palette, opts, meshes: [], uniforms: { ...this.uniforms, uMat: { value: palette.texture() } } };
+    const model = { group, inner, grid, palette, opts, meshes: [], uniforms: { ...this.uniforms, uMat: { value: palette.texture() }, ...this.ibl.uniformsFor(palette) } };
     group.userData.model = model;
     return model;
   }
@@ -263,7 +280,8 @@ export class Stage {
     this.root.add(group);
     this.models.push(model);
     this._layoutDirty = true;
-    this._shadowDirty = true;
+    this.invalidate();
+    this.shadows?.invalidate();
     if (opts.keepGrid === false) { this._fitGroundFor(model); model.grid = null; }
     return group;
   }
@@ -323,9 +341,12 @@ export class Stage {
       transparent: results.some((r) => r.transparent) ? createVoxelMaterial({ uniforms, light, transparent: true, transmission: this.look.water.transmission, hooks }) : null,
     };
     model.materials = mats;
+    // [material]: three draws geometry.groups, which face culling (cull.js) points at the visible directions
     const make = (geo, mat) => {
-      if (!inst) return new THREE.Mesh(geo, mat);
-      const m = new THREE.InstancedMesh(geo, mat, inst.length);
+      if (!inst) { const m = new THREE.Mesh(geo, [mat]); m.userData.voxelModel = model; setFaceGroups(m); return m; }
+      const m = new THREE.InstancedMesh(geo, [mat], inst.length);
+      m.userData.voxelModel = model;
+      setFaceGroups(m);
       inst.forEach((M, i) => m.setMatrixAt(i, M));
       m.instanceMatrix.needsUpdate = true;
       m.computeBoundingBox(); m.computeBoundingSphere();
@@ -340,6 +361,7 @@ export class Stage {
         mesh.customDistanceMaterial = mats.distance;
         mesh.castShadow = opts.shadow !== false; mesh.receiveShadow = opts.receive !== false;
         mesh.frustumCulled = cull;
+        mesh.userData.kind = 'solid';
         inner.add(mesh);
         model.meshes.push(mesh);
       }
@@ -347,13 +369,21 @@ export class Stage {
         const mesh = make(r.transparent, mats.transparent);
         mesh.receiveShadow = true; mesh.castShadow = false; mesh.frustumCulled = cull;
         mesh.renderOrder = 1;
+        mesh.userData.kind = 'transparent';
         inner.add(mesh);
         model.meshes.push(mesh);
       }
       stats.quads += r.stats.quads; stats.triangles += r.stats.triangles; stats.bakeMs += r.stats.bakeMs; stats.lights = Math.max(stats.lights, r.stats.lights);
     }
-    model.solid = model.meshes.find((m) => m.material === mats.solid) ?? null;
-    model.transparent = model.meshes.find((m) => m.material === mats.transparent) ?? null;
+    model.solid = model.meshes.find((m) => m.userData.kind === 'solid') ?? null;
+    model.transparent = model.meshes.find((m) => m.userData.kind === 'transparent') ?? null;
+    // vertex hooks may move geometry every frame: keep the model out of the static shadow cache
+    model.moving = !!hooks?.vertex;
+    // render cache: hooks that read uTime / custom uniforms can change any frame (redraw the model's bounds);
+    // hooks that add light or rework the output make lighting non-linear (no light layers)
+    const glsl = hooks ? ['vertex', 'vertexPars', 'color', 'emissive', 'fragment', 'fragmentPars', 'light', 'output'].map((k) => hooks[k] ?? '').join('\n') : '';
+    model.timeHooks = /\buTime\b/.test(glsl) || Object.keys(hooks?.uniforms ?? {}).length > 0;
+    model.nonLinear = !!(hooks?.light || hooks?.output || hooks?.emissive);
     model.group.userData.solid = model.solid;
     model.group.userData.transparent = model.transparent;
     model.instances = inst ?? null;
@@ -372,7 +402,8 @@ export class Stage {
     if (!m.grid) throw new Error('stage.rebuild: model was added with keepGrid: false');
     this._mesh(m);
     this._layoutDirty = true;
-    this._shadowDirty = true;
+    this.invalidate();
+    this.shadows?.invalidate();
     return group;
   }
 
@@ -380,10 +411,11 @@ export class Stage {
     const m = group.userData.model;
     this.models = this.models.filter((x) => x !== m);
     group.removeFromParent();
+    this.invalidate();
     if (m) this._clearMeshes(m);
     else group.traverse((o) => { o.geometry?.dispose(); o.material?.dispose?.(); });
     this._layoutDirty = true;
-    this._shadowDirty = true;
+    this.shadows?.invalidate();
   }
 
   /**
@@ -413,6 +445,7 @@ export class Stage {
   /** Add any THREE.Object3D (opts.fit: include in camera fit, default false). */
   addObject(obj, opts = {}) {
     this.root.add(obj);
+    this.invalidate();
     if (opts.fit) { obj.userData.fit = true; this._layoutDirty = true; }
     return obj;
   }
@@ -425,7 +458,9 @@ export class Stage {
     if (o.position) L.position.set(...o.position);
     if (o.shadow) { L.castShadow = true; L.shadow.mapSize.set(1024, 1024); L.shadow.bias = -0.002; L.shadow.radius = 3; }
     if (o.target && L.target) { L.target.position.set(...o.target); this.root.add(L.target); }
+    L.layers.enable(PARTICLE_LAYER);
     this.root.add(L);
+    this.invalidate();
     return L;
   }
 
@@ -433,7 +468,10 @@ export class Stage {
   particles(opts) {
     const p = new Particles(this, opts);
     this.particleSystems.push(p);
+    // particles are drawn in their own layer over the cached scene (post.renderParticles)
+    p.object.traverse((o) => o.layers.set(PARTICLE_LAYER));
     this.root.add(p.object);
+    this.invalidate();
     return p;
   }
 
@@ -446,6 +484,7 @@ export class Stage {
     const a = new Actors(this, opts);
     this.actorSystems.push(a);
     this.root.add(a.object);
+    this.invalidate();
     return a;
   }
 
@@ -480,7 +519,10 @@ export class Stage {
   async progress(text, fraction) { await this.ui?.progress(text, fraction); }
 
   /** fn(t, dt) every frame (t = seconds since start, frozen with ?t=). */
-  onUpdate(fn) { this.updaters.push(fn); return this; }
+  onUpdate(fn) { this.updaters.push(fn); this.wake(); return this; }
+
+  /** Redraw everything next frame (after changing something the render cache can't see, e.g. a uniform). */
+  invalidate() { this._sceneDirty = true; this.wake(); }
 
   // ---- look -----------------------------------------------------------------------------------
 
@@ -507,13 +549,19 @@ export class Stage {
     this.sun.castShadow = !!L.sun.shadow;
     this.sun.shadow.mapSize.set(L.sun.mapSize, L.sun.mapSize);
     this.sun.shadow.map?.dispose(); this.sun.shadow.map = null;
+    this.shadows.dispose();
     this.sun.shadow.radius = L.sun.softness;
     this.sun.shadow.bias = L.sun.bias; this.sun.shadow.normalBias = L.sun.normalBias;
     setLin(this.fill.color, L.fill.color); this.fill.intensity = L.fill.intensity;
     setLin(this.ambient.color, L.ambient.color); this.ambient.intensity = L.ambient.intensity;
+    // a light at 0 still costs a full BRDF evaluation per pixel: take it out of the shaders
+    this.fill.visible = L.fill.intensity > 0;
+    this.ambient.visible = L.ambient.intensity > 0;
     this._makeEnv();
     this.post.applyLook(L);
-    this._shadowDirty = true;
+    this.shadows?.invalidate();
+    this._sceneDirty = true;
+    this.wake?.();
     const g = this.ground.material;
     g.visible = L.ground.type !== 'none';
     this.ground.visible = L.ground.type !== 'none';
@@ -617,7 +665,7 @@ export class Stage {
     this._frameCamera();
     this._fitShadow();
     this._fitGround();
-    this._shadowDirty = true;
+    this.shadows?.invalidate();
   }
 
   _frameCamera() {
@@ -635,13 +683,14 @@ export class Stage {
   }
 
   _fitShadow() {
-    this._shadowDirty = true;
     const L = this.look.sun, R = this.radius * 1.05, c = this.bounds.getCenter(new THREE.Vector3());
     const d = sunDir(L.azimuth, L.elevation);
     if (L.follow) d.applyAxisAngle(new THREE.Vector3(0, 1, 0), this.controls.getAzimuthalAngle() - this.camOpts.yaw * DEG);
-    this.sun.position.copy(c).addScaledVector(d, R * 3);
-    this.sun.target.position.copy(c);
+    const p = c.clone().addScaledVector(d, R * 3);
     const s = this.sun.shadow.camera;
+    if (!p.equals(this.sun.position) || !c.equals(this.sun.target.position) || s.right !== R) this.shadows.invalidate();
+    this.sun.position.copy(p);
+    this.sun.target.position.copy(c);
     s.left = -R; s.right = R; s.top = R; s.bottom = -R; s.near = R * 0.5; s.far = R * 6;
     s.updateProjectionMatrix();
     const fd = sunDir(this.look.fill.azimuth, this.look.fill.elevation);
@@ -728,6 +777,7 @@ export class Stage {
     this.post.setSize(w * this.dpr, h * this.dpr);
     if (this._frame) this._frameCamera(); else this._layoutDirty = true; // don't reset the orbit on resize
     this._dirty = true;
+    this.wake?.();
   }
 
   // ---- loop -----------------------------------------------------------------------------------
@@ -754,17 +804,58 @@ export class Stage {
             this._prevRaf = now;
             if (this._acc < iv - 1) return;
             this._acc = Math.min(this._acc - iv, iv);
-            this.frame();
+            const drew = this.frame();
+            // nothing changed for a few frames and nothing can change by itself → stop the loop entirely
+            // (no wakeups at all) until input / resize / a look or scene change calls wake()
+            this._quiet = drew ? 0 : (this._quiet ?? 0) + 1;
+            if ((this._quiet > 2 && !this._mayAnimate()) || this._offscreen) { cancelAnimationFrame(this._raf); this._raf = null; }
           };
+          this._loop = loop;
           this._raf = requestAnimationFrame(loop);
+          // a piece scrolled out of view (embedded in a page) stops rendering
+          if (typeof IntersectionObserver !== 'undefined') {
+            this._io = new IntersectionObserver(([e]) => { this._offscreen = !e.isIntersecting; if (!this._offscreen) this.wake(); });
+            this._io.observe(this.renderer.domElement);
+          }
         }
         requestAnimationFrame(() => { window.VOXEL.ready = true; ok(this); });
+        // ?bench: log what a frame costs here (at rest, then orbiting) — real-GPU numbers for bench.mjs
+        if (params.has('bench') && !this.shot) setTimeout(() => { this.bench({ frames: 120 }); this.bench({ frames: 120, moving: true }); }, 1500);
       };
       requestAnimationFrame(first);
     });
   }
 
-  stop() { cancelAnimationFrame(this._raf); }
+  // OrbitControls damping decays geometrically and only stops at ~1e-6 rad: end it once the motion left is
+  // under a tenth of a pixel, so the cache isn't fed seconds of invisible camera changes after each drag
+  _settleDamping() {
+    const c = this.controls, d = c._sphericalDelta, p = c._panOffset;
+    if (!c.enableDamping || !d || !p) return;
+    const cam = this.camera, H = this.h * this.dpr;
+    const ppu = cam.isOrthographicCamera ? (H / (cam.top - cam.bottom)) * cam.zoom : H / (2 * Math.tan((cam.fov * DEG) / 2) * cam.position.distanceTo(c.target));
+    const left = (Math.abs(d.theta) + Math.abs(d.phi)) * cam.position.distanceTo(c.target) * ppu + p.length() * ppu;
+    if (left > 0 && left < 0.1) { d.set(0, 0, 0); p.set(0, 0, 0); }
+  }
+
+  stop() { cancelAnimationFrame(this._raf); this._raf = null; this._loop = null; }
+
+  /** Restart a sleeping render loop (input, resize, look/scene changes call this). */
+  wake() {
+    if (!this._loop || this._raf || this._offscreen) return;
+    this._quiet = 0; this._prevRaf = null; this._acc = null;
+    this._last = performance.now(); // no time jump for the frame after a long sleep
+    this._raf = requestAnimationFrame(this._loop);
+  }
+
+  // can the scene change without input? (actors, particles, user updaters, animated materials, rotation…)
+  _mayAnimate() {
+    const c = this.camOpts;
+    if (this.updaters.length || this.actorSystems.length || this.particleSystems.length || c.autoRotate || c.idleRotate) return true;
+    const L = this.look, st = L.background.stars;
+    if (st && (typeof st === 'object' ? st.amount : st)) return true;
+    const wind = L.wind.strength > 0 && L.wind.speed > 0, water = L.water.strength > 0 && L.water.speed > 0;
+    return this.models.some((m) => m.timeHooks || m.meshes.some((x) => { const b = x.geometry.userData.boxes; return b && (b.flicker || (wind && b.sway) || (water && b.water)); }));
+  }
 
   frame() {
     const now = performance.now();
@@ -776,29 +867,23 @@ export class Stage {
     this._layout();
     const c = this.camOpts;
     const idle = this._interacted ? (now - this._interacted) / 1000 : Infinity;
-    const reduce = matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const reduce = this._reduceMotion?.matches;
     if (!this.shot && !reduce && (c.autoRotate || (c.idleRotate && idle > 6))) {
       this.controls.autoRotate = true;
       this.controls.autoRotateSpeed = (c.autoRotate || c.idleRotate) / 6; // deg/s → OrbitControls units
     } else this.controls.autoRotate = false;
+    this._settleDamping();
     this.controls.update(dt);
     if (this.look.sun.follow) this._fitShadow();
     this.uniforms.uTime.value = t;
-    // shadow map refresh: 'always' | 'static' (only when something changed) | N (every N frames)
-    const su = this.look.sun.update ?? 'always';
-    this.renderer.shadowMap.autoUpdate = false;
-    this._frameNo = (this._frameNo ?? 0) + 1;
-    if (su === 'always' || this._shadowDirty || (typeof su === 'number' && this._frameNo % Math.max(1, su) === 0)) {
-      this.renderer.shadowMap.needsUpdate = true;
-      this._shadowDirty = false;
-    }
     for (const m of this.models) m.uniforms.uMat.value = m.palette.texture();
     for (const p of this.particleSystems) p.update(t, dt);
     this._stepActors(t, dt);
     for (const fn of this.updaters) fn(t, dt);
-    this._render(t);
-    this.ui?.frame(dt);
-    this._adapt(dt);
+    const drew = this._render(t);
+    this.ui?.frame(dt, drew);
+    if (drew) this._adapt(dt);
+    return drew;
   }
 
   // Drop the render resolution in 0.25 steps (never below 1, or 0.75 on 1x screens) when frames are slow.
@@ -813,7 +898,37 @@ export class Stage {
     if (avg > slow && this.dpr > floor) { this.dpr = Math.max(floor, this.dpr - 0.25); this.resize(); }
   }
 
-  _render(t) {
+  // models whose transform changed since the last frame are "moving" from then on (out of the static shadow cache)
+  _trackMotion() {
+    for (const m of this.models) {
+      const e = m.inner.matrixWorld.elements, prev = m._mw;
+      if (prev) { if (!m.moving) for (let i = 0; i < 16; i++) if (prev[i] !== e[i]) { m.moving = true; break; } prev.set(e); }
+      else m._mw = Float64Array.from(e);
+    }
+  }
+
+  // draw only the face directions of each voxel mesh that can face this camera (cull.js)
+  _cullFaces(camera) {
+    camera.updateMatrixWorld();
+    const view = camera.isOrthographicCamera ? { dir: camera.getWorldDirection(_view) } : { pos: _view.setFromMatrixPosition(camera.matrixWorld) };
+    for (const m of this.models) for (const mesh of m.meshes) setFaceGroups(mesh, faceMask(mesh, view));
+  }
+
+  /**
+   * Draw a frame: plan what changed (cache.js), then shadows → reflection → scene (all / rects / not at all,
+   * + light layers) → particle layer → post. Returns false when nothing needed drawing.
+   */
+  _render(t, force = false) {
+    this.scene.updateMatrixWorld();
+    this._trackMotion();
+    const rc = this.renderCache;
+    // the floor reflection is drawn with every light at its real intensity: no light layers with it
+    rc.noLayers = this.models.some((m) => m.nonLinear) || (this.look.ground.reflect > 0 && this.look.ground.type !== 'none');
+    const plan = rc.plan();
+    if (force && plan.mode !== 'full') { plan.mode = 'full'; plan.seed = rc.layered.length > 0; plan.rects = null; }
+    if (plan.mode === 'skip') return false;
+    this._benchHook?.(plan);
+    this.shadows.pending = true; // runs inside the first scene render call below (shadows.js)
     const L = this.look, R = this.radius ?? 10;
     const toTarget = this.camera.position.distanceTo(this.controls.target);
     let fog = null, dof = null;
@@ -827,8 +942,86 @@ export class Stage {
         dof = { mode: 2, focus: L.dof.focus, band: L.dof.band, range: L.dof.range, maxBlur: L.dof.maxBlur * scale, angle: (L.dof.angle ?? 0) * DEG, bokeh: L.dof.bokeh };
       }
     }
+    this._updateIbl(this.camera);
     this._renderReflection();
-    this.post.render(this.scene, this.camera, { time: t, fog, dof, radius: R });
+    this._cullFaces(this.camera);
+    // plain full frames draw particles in the scene pass; cached frames composite them as their own layer
+    const plain = plan.mode === 'full' && !plan.seed, layered = plain ? [] : rc.layered;
+    const parts = this.particleSystems.some((p) => p.object.visible);
+    if (plain) this.camera.layers.enable(PARTICLE_LAYER);
+    try {
+      if (plan.mode === 'full' || plan.mode === 'partial') this._drawScene(plan.mode === 'full' ? null : plan.rects, layered);
+    } finally { this.camera.layers.disable(PARTICLE_LAYER); }
+    // light layer weights: each layer was drawn at intensity 1 in white (+ d/dposition layers × offset)
+    const K = this.post.su.uLayerK.value;
+    let n = 0;
+    for (const e of layered) {
+      const l = e.light, k = K[n++].set(l.color.r, l.color.g, l.color.b).multiplyScalar(l.intensity);
+      if (e.layers === 4) for (let a = 0; a < 3; a++) K[n++].copy(k).multiplyScalar(l.position.getComponent(a) - e.p0.getComponent(a));
+    }
+    this.post.layers = n;
+    if (parts && !plain) this.post.renderParticles(this.scene, this.camera, PARTICLE_LAYER);
+    this.post.particles = parts && !plain;
+    this.post.finish(this.camera, { time: t, fog, dof, radius: R });
+    rc.drawn(plan);
+    return true;
+  }
+
+  // flat-face IBL tables (ibl.js) for every palette in use, for this camera
+  _updateIbl(camera) {
+    const pals = new Set(this.models.map((m) => m.palette));
+    for (const a of this.actorSystems) for (const set of a.sets) pals.add(set.rig.palette);
+    this.ibl.update(this.scene.environment, camera, pals);
+  }
+
+  // scene pass(es) into the persistent scene target: rects null = everything. With light layers: each layer
+  // (only that light, at intensity 1) is drawn and copied out, then the scene without the layered lights.
+  _drawScene(rects, layered) {
+    const post = this.post, draw = (r) => post.renderScene(this.scene, this.camera, r);
+    if (!layered.length) return draw(rects);
+    const geo = rects ? rects.filter((r) => !r.emissive) : null; // flickering voxels only change the base layer
+    if (!rects || geo.length) {
+      let i = 0;
+      for (const e of layered) {
+        const l = e.light, pos = l.position.clone();
+        if (e.layers === 4 && (!rects || !e.p0)) e.p0 = pos.clone(); // (re)seed: gradients around here
+        try {
+          if (e.layers === 4) { l.position.copy(e.p0); l.updateMatrixWorld(); }
+          this._lightOnly(l, () => draw(geo));
+          post.copyLayer(i, geo);
+          if (e.layers === 4) for (let a = 0; a < 3; a++) {
+            l.position.copy(e.p0).setComponent(a, e.p0.getComponent(a) + GRAD_STEP);
+            l.updateMatrixWorld();
+            this._lightOnly(l, () => draw(geo));
+            post.diffLayer(i + 1 + a, i, GRAD_STEP, geo);
+          }
+        } finally { l.position.copy(pos); l.updateMatrixWorld(); }
+        i += e.layers;
+      }
+    }
+    const saved = layered.map((e) => e.light.intensity);
+    layered.forEach((e) => { e.light.intensity = 0; });
+    try { draw(rects); } finally { layered.forEach((e, i) => { e.light.intensity = saved[i]; }); }
+  }
+
+  // run fn with `light` as the only light source (intensity 1, white): no other lights, sky, emissive,
+  // baked light, water glow or shadow-catcher ground — what that light alone adds to the image
+  _lightOnly(light, fn) {
+    const lights = [], u = this.uniforms;
+    this.scene.traverse((o) => { if (o.isLight) lights.push([o, o.intensity]); });
+    const color = light.color.clone(), env = this.scene.environmentIntensity, look = u.uLook.value.clone(), glow = u.uWater.value.w, ground = this.ground.visible;
+    for (const [o] of lights) o.intensity = 0;
+    light.intensity = 1; light.color.setRGB(1, 1, 1);
+    this.scene.environmentIntensity = 0;
+    u.uLook.value.x = 0; u.uLook.value.y = 0; u.uWater.value.w = 0;
+    this.ground.visible = false;
+    try { fn(); } finally {
+      for (const [o, i] of lights) o.intensity = i;
+      light.color.copy(color);
+      this.scene.environmentIntensity = env;
+      u.uLook.value.copy(look); u.uWater.value.w = glow;
+      this.ground.visible = ground;
+    }
   }
 
   _renderReflection() {
@@ -840,6 +1033,7 @@ export class Stage {
     const cam = this.camera, y = this.ground.position.y;
     const vc = (this._reflCam ??= cam.clone());
     vc.copy(cam);
+    vc.layers.enable(PARTICLE_LAYER); // particles show in the reflection
     const tgt = this.controls.target.clone();
     vc.position.y = 2 * y - cam.position.y;
     tgt.y = 2 * y - tgt.y;
@@ -856,7 +1050,10 @@ export class Stage {
     r.setClearColor(0x000000, 0);
     r.setRenderTarget(this._reflRT);
     r.clear(true, true, true);
-    r.render(this.scene, vc);
+    this._cullFaces(vc);
+    const ibl = this.ibl.on.y;
+    this.ibl.on.y = 0; // the radiance table is for the main camera's view direction
+    try { r.render(this.scene, vc); } finally { this.ibl.on.y = ibl; }
     r.setClearColor(prevColor, prevAlpha);
     this.ground.visible = true;
     gu.uRefl.value = this._reflRT.texture;
@@ -882,7 +1079,7 @@ export class Stage {
       this.camera.position.copy(this.controls.target).add(new THREE.Vector3().setFromSphericalCoords(dist, pol, az));
       this.camera.lookAt(this.controls.target);
       if (this.look.sun.follow) this._fitShadow();
-      this._render(this.time);
+      this._render(this.time, true);
       ctx.drawImage(this.renderer.domElement, (i % cols) * W, Math.floor(i / cols) * H);
     }
     // restore the original view
@@ -890,6 +1087,73 @@ export class Stage {
     this.camera.lookAt(this.controls.target);
     if (this.look.sun.follow) this._fitShadow();
     return jpeg ? out.toDataURL('image/jpeg', 0.88) : out.toDataURL('image/png');
+  }
+
+  /**
+   * Frame-cost benchmark (voxel/tools/bench.mjs, or ?bench in a real browser): `frames` uncapped, GPU-synced
+   * frames with the clock running at 60 Hz. Returns medians in ms: frame (what the loop pays per frame),
+   * cpu (JS part of it), scene (main pass without shadow update), shadow (one shadow-map update), post.
+   * moving: orbit the camera 0.5°/frame (nothing can be reused between frames).
+   */
+  bench({ frames = 30, moving = false } = {}) {
+    const loop = this._loop;
+    this.stop();
+    const r = this.renderer, gl = r.getContext(), px = new Uint8Array(4);
+    const sync = () => gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+    const med = (a) => { const s = [...a].sort((x, y) => x - y); return Math.round(s[s.length >> 1] * 100) / 100; };
+    const fixed = this.fixedTime;
+    this.fixedTime = null;
+    const orbit = () => {
+      if (!moving) return;
+      const o = this.camera.position.clone().sub(this.controls.target).applyAxisAngle(new THREE.Vector3(0, 1, 0), 0.5 * DEG);
+      this.camera.position.copy(this.controls.target).add(o);
+      this.controls.update();
+    };
+    const time = (fn, cpu) => {
+      const t = [];
+      for (let i = 0; i < frames + 3; i++) {
+        orbit();
+        const t0 = performance.now();
+        fn();
+        const t1 = performance.now();
+        sync();
+        if (i >= 3) { t.push(performance.now() - t0); cpu?.push(t1 - t0); }
+      }
+      return med(t);
+    };
+    const modes = { full: 0, partial: 0, post: 0, skip: 0 };
+    let coverage = 0, measuring = false;
+    this._benchHook = (plan) => { if (measuring) coverage += plan.mode === 'partial' ? this.renderCache.stats.coverage : plan.mode === 'full' ? 1 : 0; };
+    const cpu = [];
+    let k = 0;
+    const frame = time(() => {
+      measuring = ++k > 3;
+      this._last = performance.now() - 1000 / 60;
+      const drew = this.frame();
+      if (measuring) modes[drew ? this.renderCache.stats.mode : 'skip']++;
+    }, cpu);
+    this._benchHook = null;
+    const pass = (shadow) => () => {
+      if (shadow) { this.shadows.invalidate(); this.shadows.pending = true; }
+      this._cullFaces(this.camera);
+      r.setRenderTarget(this.post.scene);
+      r.render(this.scene, this.camera);
+    };
+    const scene = time(pass(false)), withShadow = time(pass(true));
+    r.setRenderTarget(null);
+    this.invalidate();
+    this.fixedTime = fixed;
+    const info = this.stats();
+    const res = {
+      frame, cpu: med(cpu), scene, shadow: Math.max(0, Math.round((withShadow - scene) * 100) / 100),
+      post: Math.max(0, Math.round((frame - withShadow) * 100) / 100),
+      draws: info.drawCalls, triangles: info.triangles, quads: info.quads, voxels: info.voxels, frames,
+      modes, coverage: Math.round((coverage / frames) * 1000) / 1000, layers: this.renderCache.layered.length,
+      size: info.size,
+    };
+    console.log('voxel bench', JSON.stringify(res));
+    if (loop) { this._loop = loop; this.wake(); }
+    return res;
   }
 
   stats() {
@@ -906,6 +1170,7 @@ export class Stage {
       drawCalls: info.render.calls, triangles: info.render.triangles, // main scene pass (shadows/reflection excluded)
       bounds: { min: this.bounds.min.toArray().map(Math.round), max: this.bounds.max.toArray().map(Math.round) },
       size: [this.w, this.h, this.dpr],
+      cache: { ...this.renderCache.stats, reason: this.renderCache.reason },
     };
   }
 }
@@ -919,6 +1184,8 @@ function instanceMatrix(it) {
   const sc = Array.isArray(o.scale) ? new THREE.Vector3(...o.scale) : new THREE.Vector3().setScalar(o.scale ?? 1);
   return new THREE.Matrix4().compose(new THREE.Vector3(...(o.position ?? [0, 0, 0])), new THREE.Quaternion().setFromEuler(rot), sc);
 }
+
+const _view = new THREE.Vector3();
 
 function sunDir(az, el) {
   return new THREE.Vector3(Math.cos(el * DEG) * Math.sin(az * DEG), Math.sin(el * DEG), Math.cos(el * DEG) * Math.cos(az * DEG)).normalize();
@@ -991,7 +1258,11 @@ function makeGround() {
   return g;
 }
 
-/** More PCF taps than three's default 5 (soft sun shadows without the noise). */
+/**
+ * 16 PCF taps instead of three's 5 (soft sun shadows without the noise) — but 4 of them first: when those
+ * agree the pixel is fully lit or fully shadowed (almost every pixel; the penumbra is ~2 shadow texels) and
+ * the other 12 are skipped. Penumbra pixels get exactly the same 16-tap average as before.
+ */
 function patchShadowChunk() {
   const C = THREE.ShaderChunk;
   if (C.shadowmap_pars_fragment.includes('VOXEL_SHADOW_SAMPLES')) return;
@@ -999,6 +1270,9 @@ function patchShadowChunk() {
   if (!re.test(C.shadowmap_pars_fragment)) { console.warn('voxel: shadow chunk patch failed (three version changed?)'); return; }
   C.shadowmap_pars_fragment = '#ifndef VOXEL_SHADOW_SAMPLES\n#define VOXEL_SHADOW_SAMPLES 16\n#endif\n' + C.shadowmap_pars_fragment.replace(re,
     `shadow = 0.0;
-				for ( int i = 0; i < VOXEL_SHADOW_SAMPLES; i ++ ) shadow += texture( shadowMap, vec3( shadowCoord.xy + vogelDiskSample( i, VOXEL_SHADOW_SAMPLES, phi ) * radius, shadowCoord.z ) );
-				shadow /= float( VOXEL_SHADOW_SAMPLES );`);
+				for ( int i = 3; i < VOXEL_SHADOW_SAMPLES; i += 4 ) shadow += texture( shadowMap, vec3( shadowCoord.xy + vogelDiskSample( i, VOXEL_SHADOW_SAMPLES, phi ) * radius, shadowCoord.z ) );
+				if ( shadow > 0.0 && shadow < float( VOXEL_SHADOW_SAMPLES / 4 ) ) {
+					for ( int i = 0; i < VOXEL_SHADOW_SAMPLES; i ++ ) if ( ( i & 3 ) != 3 ) shadow += texture( shadowMap, vec3( shadowCoord.xy + vogelDiskSample( i, VOXEL_SHADOW_SAMPLES, phi ) * radius, shadowCoord.z ) );
+					shadow /= float( VOXEL_SHADOW_SAMPLES );
+				} else shadow /= float( VOXEL_SHADOW_SAMPLES / 4 );`);
 }

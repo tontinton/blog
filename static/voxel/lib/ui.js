@@ -92,7 +92,7 @@ export function createUI(stage, o = {}) {
   cv.setAttribute('role', 'img');
   cv.setAttribute('aria-label', [o.title, o.subtitle].filter(Boolean).join(' — ') || 'Voxel art');
 
-  let gui = null, statsEl = null, acc = 0, frames = 0;
+  let gui = null, statsEl = null, acc = 0, frames = 0, drawn = 0;
   if (stage.debug) {
     import('./vendor/lil-gui.module.min.js').then(({ GUI }) => {
       gui = buildGui(GUI, stage);
@@ -115,13 +115,14 @@ export function createUI(stage, o = {}) {
     },
     interacted() { hint?.classList.add('gone'); },
     lookChanged() { theme(); },
-    frame(dt) {
+    frame(dt, drew = true) {
       if (!statsEl) return;
-      acc += dt; frames++;
+      acc += dt; frames++; if (drew) drawn++;
       if (acc > 0.5) {
-        const s = stage.stats();
-        statsEl.textContent = `${Math.round(frames / acc)} fps  dpr ${stage.dpr}\n${s.voxels.toLocaleString()} voxels  ${s.quads.toLocaleString()} quads\n${s.drawCalls} draws  ${s.triangles.toLocaleString()} tris\nmesh ${s.meshMs}ms  bake ${s.bakeMs}ms  lights ${s.lightGroups}\n${gpuName(stage.renderer)}`;
-        acc = 0; frames = 0;
+        const s = stage.stats(), c = s.cache;
+        const mode = drew ? `${c.mode}${c.mode === 'partial' ? ` ${Math.round(c.coverage * 100)}%` : ''}${c.layers ? `  ${c.layers} light layers` : ''}` : 'idle';
+        statsEl.textContent = `${Math.round(frames / acc)} fps (${Math.round(drawn / acc)} drawn: ${mode})  dpr ${stage.dpr}\n${s.voxels.toLocaleString()} voxels  ${s.quads.toLocaleString()} quads\n${s.drawCalls} draws  ${s.triangles.toLocaleString()} tris\nmesh ${s.meshMs}ms  bake ${s.bakeMs}ms  lights ${s.lightGroups}\n${gpuName(stage.renderer)}`;
+        acc = 0; frames = 0; drawn = 0;
       }
     },
   };

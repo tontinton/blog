@@ -124,8 +124,12 @@ cost the quads.
   three.js frustum-culls what's off screen; clusters mesh in parallel workers (`stage.addAsync`).
 - **Instancing**: repeated assets are one draw call each (`instances` / `ctx.instance`); a creature
   variant is one rigged InstancedMesh (joint matrices in a texture) however many there are.
-- **Static shadows**: `look.sun.update: 'static'` renders the shadow map once (and when something is
-  added); `N` re-renders every N frames. Actors switch to blob shadows automatically.
+- **Cached shadows**: still geometry goes into the shadow map once; only moving casters are redrawn per
+  frame (swaying leaves included — `look.sun.update: 'static'` freezes those; `N` updates every N frames).
+- **Face culling + draw order**: only the ≤ 3 face directions that can face the camera (or the sun, in the
+  shadow pass) are drawn, front-to-back within each direction — half the vertices, less overdraw.
+- **Incremental frames**: when the camera rests, only what changed is redrawn (see api.md, "Render cache");
+  a world with a few walkers and no wind redraws a few percent of its pixels per frame.
 - **Adaptive resolution**: the stage drops the pixel ratio in 0.25 steps when frames take > 26 ms
   (`adaptive: false` to disable); touch devices cap DPR at 1.5.
 - **Memory**: `keepGrid: false` frees the voxel grid after meshing (picking still works; `rebuild` doesn't).

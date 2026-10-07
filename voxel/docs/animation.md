@@ -76,7 +76,8 @@ rooftops and closed courtyards are never used). Create actors **after** `stage.a
 handles this itself).
 
 **Shadows.** `shadow: 'auto'` = real shadow-map shadows (when `look.sun.update` is `'always'`), else a soft
-blob under each agent (cheap, works with static shadow maps). Force with `true | 'blob' | false`.
+blob under each agent. Real shadows are cheap: only the agents are redrawn into the cached shadow map each
+frame. Force with `true | 'blob' | false`.
 
 **Variety & cost.** A rig's parts are merged into one geometry and drawn as one rigged InstancedMesh
 (joint matrices live in a float texture): **one draw call per variant** (+1 in the shadow pass, or +1 for

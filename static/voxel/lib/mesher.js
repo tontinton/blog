@@ -9,6 +9,12 @@
 //
 // Faces merge only when every corner carries identical values, so AO/bakes stay exact; bevel edge bits
 // are derived from the merged rectangle's border.
+//
+// Quads are emitted in 12 buckets: face direction in the cyclic order +x +y +z -x -y -z, each split into
+// still | swaying quads. geometry.userData.ranges (13 quad offsets) lets the stage draw only the directions
+// that can face the camera (or, for shadows, face away from the light) — at most half of them — and redraw
+// only the swaying quads into a cached shadow map. userData.boxes: { sway, flicker, water } → flat lists of
+// [x0, y0, z0, x1, y1, z1] bounds of animated quads (per 16³ cell, mesh coordinates) for partial redraws.
 import * as THREE from './three.js';
 import { CHUNK, CHUNK_BITS } from './constants.js';
 import { Baker } from './bake.js';
@@ -18,6 +24,11 @@ const ST = [1, P * P, P]; // padded strides for axes x, y, z
 const PAD0 = 1 + P + P * P; // padded index of local (0, 0, 0)
 const CELLS = [[0, 0], [1, 0], [0, 1], [1, 1]];
 const LIGHT_SCALE = 64; // stored = light * 64 → max 4.0
+
+// face direction (0 +x, 1 -x, 2 +y, 3 -y, 4 +z, 5 -z) → position in the cyclic bucket order +x +y +z -x -y -z:
+// any 3 mutually visible directions are adjacent (in 6 of the 8 cases), so they draw as one range
+export const DIR_POS = [0, 3, 1, 4, 2, 5];
+export const ANIM = { sway: 1, flicker: 2, water: 4 };
 
 class QuadBuffer {
   constructor(light) {
@@ -29,24 +40,55 @@ class QuadBuffer {
     this.edge = new Uint8Array(this.cap * 16);
     this.lt = light ? new Uint8Array(this.cap * 16) : null;
     this.flip = new Uint8Array(this.cap);
+    this.key = new Uint8Array(this.cap);  // bucket: DIR_POS * 2 + swaying
+    this.anim = new Uint8Array(this.cap); // ANIM bits of the quad's material
   }
   grow() {
     this.cap *= 2;
     const g = (a, k) => { const b = new a.constructor(this.cap * k); b.set(a); return b; };
     this.pos = g(this.pos, 16); this.info = g(this.info, 16); this.edge = g(this.edge, 16); this.flip = g(this.flip, 1);
+    this.key = g(this.key, 1); this.anim = g(this.anim, 1);
     if (this.lt) this.lt = g(this.lt, 16);
   }
-  /** Plain typed arrays (structured-clone/transfer friendly — what workers send back). */
+  /** Plain typed arrays (structured-clone/transfer friendly — what workers send back), quads sorted into buckets. */
   toArrays() {
     if (!this.n) return null;
-    const nv = this.n * 4;
-    const index = nv > 65535 ? new Uint32Array(this.n * 6) : new Uint16Array(this.n * 6);
-    for (let q = 0; q < this.n; q++) {
-      const v = q * 4, i = q * 6;
+    const n = this.n, nv = n * 4;
+    const ranges = new Uint32Array(13);
+    for (let q = 0; q < n; q++) ranges[this.key[q] + 1]++;
+    for (let b = 1; b < 13; b++) ranges[b] += ranges[b - 1];
+    // within a bucket, front faces first: a +x face can only be seen from the +x side, so the larger its
+    // x the nearer it is to any camera that sees it (−x: the smaller). Drawing near-to-far lets early-z
+    // reject what's behind (treetops before the ground under them) — a fixed order that suits every view.
+    const order = new Uint32Array(n), at = ranges.slice(0, 12);
+    for (let q = 0; q < n; q++) order[at[this.key[q]]++] = q;
+    const depth = new Float32Array(n);
+    for (let q = 0; q < n; q++) { const d = this.pos[q * 16 + 3] & 7; depth[q] = d & 1 ? this.pos[q * 16 + (d >> 1)] : -this.pos[q * 16 + (d >> 1)]; }
+    for (let b = 0; b < 12; b++) order.subarray(ranges[b], ranges[b + 1]).sort((x, y) => depth[x] - depth[y]);
+    const pos = new Int16Array(nv * 4), info = new Uint8Array(nv * 4), edge = new Uint8Array(nv * 4), light = this.lt ? new Uint8Array(nv * 4) : null;
+    const index = nv > 65535 ? new Uint32Array(n * 6) : new Uint16Array(n * 6);
+    const boxes = {}, bins = {};
+    for (let d = 0; d < n; d++) {
+      const q = order[d], s = q * 16, o = d * 16;
+      pos.set(this.pos.subarray(s, s + 16), o); info.set(this.info.subarray(s, s + 16), o); edge.set(this.edge.subarray(s, s + 16), o);
+      if (light) light.set(this.lt.subarray(s, s + 16), o);
+      const v = d * 4, i = d * 6;
       if (this.flip[q]) { index[i] = v + 1; index[i + 1] = v + 2; index[i + 2] = v + 3; index[i + 3] = v + 1; index[i + 4] = v + 3; index[i + 5] = v; }
       else { index[i] = v; index[i + 1] = v + 1; index[i + 2] = v + 2; index[i + 3] = v; index[i + 4] = v + 2; index[i + 5] = v + 3; }
+      const an = this.anim[q];
+      if (an) {
+        // bounds of animated quads, binned in 16³ cells so a redraw covers the trees that sway, not the forest
+        const bin = (this.pos[s] >> 4) * 1e6 + (this.pos[s + 1] >> 4) * 1e3 + (this.pos[s + 2] >> 4);
+        for (const k in ANIM) if (an & ANIM[k]) {
+          const m = (bins[k] ??= new Map());
+          let b = m.get(bin);
+          if (!b) m.set(bin, (b = [Infinity, Infinity, Infinity, -Infinity, -Infinity, -Infinity]));
+          for (let c = 0; c < 16; c += 4) for (let a = 0; a < 3; a++) { const x = this.pos[s + c + a]; if (x < b[a]) b[a] = x; if (x > b[a + 3]) b[a + 3] = x; }
+        }
+      }
     }
-    return { quads: this.n, pos: this.pos.slice(0, nv * 4), info: this.info.slice(0, nv * 4), edge: this.edge.slice(0, nv * 4), light: this.lt ? this.lt.slice(0, nv * 4) : null, index };
+    for (const k in bins) boxes[k] = [...bins[k].values()].flat();
+    return { quads: n, pos, info, edge, light, index, ranges, boxes };
   }
   toGeometry() { return geometryFromArrays(this.toArrays()); }
 }
@@ -64,6 +106,8 @@ export function geometryFromArrays(a) {
   geo.setIndex(new THREE.BufferAttribute(a.index, 1));
   geo.computeBoundingBox();
   geo.computeBoundingSphere();
+  if (a.ranges) geo.userData.ranges = a.ranges;
+  if (a.boxes) geo.userData.boxes = a.boxes;
   return geo;
 }
 
@@ -92,6 +136,11 @@ export function buildMesh(grid, palette, opts = {}) {
   const np = palette.size;
   const cls = new Uint8Array(np); // 0 empty, 1 solid, 2 water, 3 glass
   for (let i = 1; i < np; i++) cls[i] = palette.defs[i].kind + 1;
+  const anim = new Uint8Array(np); // ANIM bits per material
+  for (let i = 1; i < np; i++) {
+    const d = palette.defs[i];
+    anim[i] = (d.sway > 0 ? ANIM.sway : 0) | (d.flicker > 0 && d.emissive > 0 ? ANIM.flicker : 0) | (d.kind === 1 ? ANIM.water : 0);
+  }
   const hasLights = palette.defs.some((d) => d?.light);
   const bakeOpts = opts.bake ?? {};
   const shared = bakeOpts.baker;
@@ -263,6 +312,8 @@ export function buildMesh(grid, palette, opts = {}) {
           }
           // split along the brighter diagonal to avoid AO anisotropy
           qb.flip[q] = b2 > b0 ? 1 : 0;
+          qb.anim[q] = anim[id];
+          qb.key[q] = DIR_POS[dir] * 2 + (anim[id] & ANIM.sway ? 1 : 0);
           faces++;
         }
       }
