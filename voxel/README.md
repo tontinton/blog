@@ -110,8 +110,8 @@ stage.start();
   mobile happy. `stage.stats()` (printed by shot.mjs) tells you.
 - Close-ups for details: `--query 'target=x,y,z' --zoom 4`. Lab catalog to browse what exists.
 - After finishing: write `preview.jpg`, fill in `pieces.json` (title/description/tags, `short`), run
-  `node links.mjs` (regenerates the `/v/<short>/` pages — needed after any edit to the piece's
-  `index.html`; `test.mjs` fails if they're stale), commit, push, then `node preview.mjs <short>` waits for
+  `node links.mjs` (regenerates the `/v/<short>/` pages and the content-hash import maps that bust
+  browser/CDN caches — needed after ANY edit to a piece's .js/index.html or the lib; `test.mjs` fails if stale), commit, push, then `node preview.mjs <short>` waits for
   the Cloudflare Pages build and prints the live link (`https://<branch-alias>.blog-3t8.pages.dev/v/<short>/`)
   — that link is what you give the user.
 - The `/voxel/` gallery page doesn't exist yet: pieces' back link goes home. When building the gallery,

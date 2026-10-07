@@ -16,7 +16,7 @@ Every piece with a `short` in `pieces.json` is also served at `/v/<short>/` — 
 `index.html` with `<base href="/voxel/<slug>/">` (so the address bar stays short and all relative paths
 still resolve) and a canonical link to the real page. Plain static files: no host redirects needed.
 ```sh
-node links.mjs            # regenerate static/v/ (after changing a piece's index.html or a short name)
+node links.mjs            # regenerate static/v/ + module hashes (after ANY .js/index.html/lib edit or a short rename)
 node links.mjs --check    # stale? (test.mjs runs this)
 node shot.mjs /v/cot/     # renders exactly like /voxel/cottage/
 ```
@@ -33,8 +33,14 @@ branch name lowercased with non-alphanumerics → `-`, cut to 28 chars). After `
 node preview.mjs                 # waits for the build, prints both URLs + links to the pieces changed vs main
 node preview.mjs cot             # just this piece (short name or slug); --wait 600, --sha <commit>
 ```
-Production (`https://tontinton.com/...`) updates when the branch is merged. `static/_headers` sends `Cache-Control: no-cache`
-for `/voxel/*` and `/v/*`, so browsers revalidate every module on load and a deploy shows up without a hard refresh. `voxel/lab/` scenes are not
+Production (`https://tontinton.com/...`) updates when the branch is merged.
+
+Cache busting: tontinton.com sits behind Cloudflare's edge cache, which can keep serving an old `.js` after a
+deploy (a hard refresh doesn't help). `links.mjs` therefore stamps each piece's `index.html` with an import
+map giving every module (piece files + `static/voxel/lib/**`) a content-hash query (`./people.js?v=3f2a…`)
+and loads `./scene.js?v=…`: a changed file gets a new URL, unchanged ones stay cached. Rerun
+`node links.mjs` after any edit (test.mjs fails when a hash is stale). `static/_headers` also sends
+`Cache-Control: no-cache` for `/voxel/*` and `/v/*`. (Module workers — `stage.world` — don't see import maps.) `voxel/lab/` scenes are not
 published — only `static/` is.
 
 ## Screenshots (the main feedback loop)

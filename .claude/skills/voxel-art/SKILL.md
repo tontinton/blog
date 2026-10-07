@@ -41,8 +41,9 @@ commit and a direct link to the piece on the branch preview, e.g.
 5. Finish:
    - `node shot.mjs /voxel/<slug>/ --size 1200x630 --out ../../static/voxel/<slug>/preview.jpg`
    - fill in `static/voxel/pieces.json` (title, description, tags; `short` is already set)
-   - `node links.mjs` (regenerates `/v/<short>/`; required after any edit to the piece's `index.html` —
-     `node test.mjs` fails when stale), `node shot.mjs /v/<short>/` renders identically
+   - `node links.mjs` (regenerates `/v/<short>/` and re-stamps the content-hash import map that busts
+     browser/CDN caches; required after ANY edit to a piece's files or the lib, even a one-line color change,
+     before every commit — `node test.mjs` fails when stale), `node shot.mjs /v/<short>/` renders identically
    - commit and push the branch (`git push -u origin <branch>`)
    - `node preview.mjs <short>` — waits for the Cloudflare Pages build of the pushed commit (~1–3 min) and
      prints the branch preview URL, the per-commit URL and the direct piece link.
