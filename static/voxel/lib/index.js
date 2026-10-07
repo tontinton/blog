@@ -8,7 +8,7 @@ export * from './color.js';
 export { Palette, palette } from './palette.js';
 export { VoxelGrid, chunkKey } from './grid.js';
 export { spline } from './shapes.js'; // also installs the shape methods on VoxelGrid
-export { buildMesh, geometryFromArrays, arrayBuffers } from './mesher.js';
+export { buildMesh, sharedBaker, geometryFromArrays, arrayBuffers } from './mesher.js';
 export { clusterChunks, clusterInputs } from './cluster.js';
 export { WorkerPool, getPool } from './pool.js';
 export { runRegion, runAssets, mergeInto, loadPaletteDefs } from './world.js';

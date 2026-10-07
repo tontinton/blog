@@ -248,6 +248,49 @@ export function duck(o = {}) {
     { palette: P, swim: true, lift: -0.7, scale: o.scale ?? (baby ? 0.3 : 0.5), speed: o.speed ?? [0.6, 1.3], anim: { headNod: 0.15, ...(o.anim ?? {}) } });
 }
 
+/**
+ * Squirrel: small body, big bushy tail curled up over its back, tufted ears; scampers in bursts and pauses
+ * often. opts: coat ('red' | 'grey' | { fur, fur2, belly }), scale (0.4), seed.
+ */
+export function squirrel(o = {}) {
+  const coats = { red: { fur: '#b8582a', fur2: '#8a3e1e', belly: '#f2e2c8' }, grey: { fur: '#8e8a86', fur2: '#6a6662', belly: '#ece8e0' } };
+  const c = typeof o.coat === 'object' ? o.coat : coats[o.coat ?? 'red'] ?? coats.red;
+  const P = new Palette({
+    fur: { color: c.fur, jitter: 0.05 }, fur2: { color: c.fur2 ?? shade(c.fur, -0.25), jitter: 0.05 },
+    belly: { color: c.belly ?? '#f2e2c8', jitter: 0.03 }, eye: { color: '#141414', roughness: 0.2 }, nose: { color: '#2a1e1e' },
+  });
+  const part = () => new VoxelGrid(P);
+  const body = part();
+  body.box([0, 1, 0], [2, 3, 2], 'fur');            // haunches
+  body.box([0, 1, 3], [2, 2, 4], 'fur');            // chest
+  body.box([1, 1, 1], [1, 1, 4], 'belly');
+  body.box([1, 2, 4], [1, 2, 4], 'belly');
+  const head = part();
+  head.box([0, 3, 4], [2, 4, 6], 'fur');
+  head.box([1, 3, 7], [1, 3, 7], 'nose');
+  head.box([0, 3, 7], [0, 3, 7], 'belly'); head.box([2, 3, 7], [2, 3, 7], 'belly');
+  head.set(0, 4, 6, 'eye'); head.set(2, 4, 6, 'eye');
+  head.set(0, 5, 4, 'fur2'); head.set(2, 5, 4, 'fur2'); head.set(0, 6, 4, 'fur2'); head.set(2, 6, 4, 'fur2');
+  const legs = [];
+  for (const [pair, z, h] of [[0, 4, 1], [1, 1, 1]]) for (const [side, x] of [[-1, 0], [1, 2]]) {
+    const g = part();
+    g.box([x, 0, z], [x, h - 1, z + (pair ? 1 : 0)], pair ? 'fur2' : 'fur');
+    legs.push({ name: `leg${pair ? 'B' : 'F'}${side < 0 ? 'L' : 'R'}`, role: 'leg', side, pair, grid: g, pivot: [x + 0.5, 1, z + 0.5] });
+  }
+  // bushy tail: up from the rump, curling forward over the back
+  const tail = part();
+  const spine = [[2, -1], [3, -2], [4, -2], [5, -2], [6, -2], [7, -1], [8, -1], [8, 0], [7, 1]];
+  spine.forEach(([y, z], i) => {
+    const w = i > 1 && i < 7 ? 1 : 0;
+    for (let x = 1 - w; x <= 1 + w; x++) tail.set(x, y, z, (x === 1 && i % 3 === 1) || i === spine.length - 1 ? 'fur2' : 'fur');
+    if (i > 2 && i < 7) tail.set(1, y, z - 1, 'fur');
+  });
+  return rig([{ name: 'body', role: 'body', grid: body }, { name: 'head', role: 'head', grid: head, pivot: [1.5, 3.5, 4] },
+    { name: 'tail', role: 'tail', grid: tail, pivot: [1.5, 2.5, -0.5] }, ...legs],
+  { palette: P, scale: o.scale ?? 0.4, speed: o.speed ?? [2.6, 4.4], sprint: 0.5, idle: o.idle ?? [0.8, 3], stride: 3,
+    anim: { legSwing: 0.9, bob: 0.55, tailSway: 0.25, tailSpeed: 3, headNod: 0.12, ...(o.anim ?? {}) } });
+}
+
 /** Fish (koi by default): swims just under the water surface. opts: color, color2, depth (0.3 = voxels between surface and back). */
 export function fish(o = {}) {
   const P = new Palette({ body: { color: o.color ?? '#f07a2a', jitter: 0.05 }, spot: { color: o.color2 ?? '#f4f0e8', jitter: 0.03 } });
@@ -270,6 +313,7 @@ const C_ = (name, fn, summary, habitat = 'ground', extra = {}) => defineCreature
 C_('cat', cat, 'cat; coats orange/black/white/grey/tuxedo/calico/siamese; wanders + sprints', 'ground', { variants: 3 });
 C_('dog', dog, 'dog; coats golden/brown/black/spotted/white; size small/medium/big', 'ground', { variants: 2 });
 C_('fox', fox, 'fox with a bushy tail');
+C_('squirrel', squirrel, 'squirrel (red/grey) with a curled bushy tail; scampers in bursts, pauses often');
 C_('sheep', sheep, 'sheep; slow, grazes when idle');
 C_('pig', pig, 'pig; grazes when idle');
 C_('walker', walker, 'walking person; variants: n for varied clothes; behavior path for streets', 'ground', { variants: 3 });

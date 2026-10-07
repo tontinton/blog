@@ -12,8 +12,8 @@ const argv = process.argv.slice(2);
 const si = argv.indexOf('--short');
 const shortArg = si >= 0 ? argv.splice(si, 2)[1] : null;
 const [slug, title, description = '', look = 'studio'] = argv;
-if (!slug || !title || !/^[a-z0-9-]+$/.test(slug)) {
-  console.error('usage: node new.mjs <slug> "Title" "Description." [look]   (slug: a-z 0-9 -)');
+if (!slug || !title || !/^[a-z0-9_-]+$/.test(slug)) {
+  console.error('usage: node new.mjs <slug> "Title" "Description." [look]   (slug: a-z 0-9 - _)');
   process.exit(2);
 }
 if (!LOOKS[look]) { console.error(`unknown look ${look}; have ${Object.keys(LOOKS).join(', ')}`); process.exit(2); }

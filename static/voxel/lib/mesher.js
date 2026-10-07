@@ -80,16 +80,23 @@ const ORDER_NEG = [[0, 0], [0, 1], [1, 1], [1, 0]];
  *         chunks: iterable of grid chunks to emit (default: all — clusters pass a subset; the rest of the
  *                 grid still occludes and lights them), bounds: { min, max } region the bakes cover,
  *         arrays: true → return plain typed arrays instead of geometries (workers) }
+ * bake.baker: a shared baker from sharedBaker() — reuse one AO volume + light field for many models.
+ * bake.context: grid | [grids] in the same coordinate frame — voxels that occlude (ray AO) and emit/block
+ *   baked light but are not meshed. A moving part (head, tail, door) modelled in scene coordinates and
+ *   added with `pivot` = `position` gets the AO and fireplace glow of the room it sits in, and vice versa.
  */
 export function buildMesh(grid, palette, opts = {}) {
   const t0 = performance.now();
+  const ctx = opts.bake?.context;
+  const bakeGrid = ctx ? withContext(grid, palette, Array.isArray(ctx) ? ctx : [ctx]) : grid;
   const np = palette.size;
   const cls = new Uint8Array(np); // 0 empty, 1 solid, 2 water, 3 glass
   for (let i = 1; i < np; i++) cls[i] = palette.defs[i].kind + 1;
   const hasLights = palette.defs.some((d) => d?.light);
   const bakeOpts = opts.bake ?? {};
-  const bakeAO = !!bakeOpts.ao, bakeLight = !!bakeOpts.light && hasLights;
-  const baker = (bakeAO || bakeLight) && grid.bounds() ? new Baker(grid, palette, cls, { ao: bakeOpts.ao, light: bakeLight && bakeOpts.light, region: opts.bounds }) : null;
+  const shared = bakeOpts.baker;
+  const bakeAO = shared ? shared.aoOn : !!bakeOpts.ao, bakeLight = shared ? !!shared.light : !!bakeOpts.light && hasLights;
+  const baker = shared ?? ((bakeAO || bakeLight) && grid.bounds() ? new Baker(bakeGrid, palette, cls, { ao: bakeOpts.ao, light: bakeLight && bakeOpts.light, region: ctx ? opts.bounds ?? grid.bounds() : opts.bounds, spill: !!ctx }) : null);
   const useLight = !!baker?.light;
   const vao = opts.ao !== false, greedy = opts.greedy !== false;
   const tBake = performance.now() - t0;
@@ -266,4 +273,43 @@ export function buildMesh(grid, palette, opts = {}) {
     solid, transparent,
     stats: { quads: out[0].n + out[1].n, triangles: (out[0].n + out[1].n) * 2, ms: Math.round(performance.now() - t0), bakeMs: Math.round(tBake), lights: baker?.light?.groups ?? 0 },
   };
+}
+
+/** A read-only view of `grid` plus context grids (grid wins where both have a voxel) for the bakers. */
+function withContext(grid, palette, ctxs) {
+  const maps = ctxs.map((c) => (c.palette && c.palette !== palette ? palette.merge(c.palette) : null));
+  const id = (k, v) => (maps[k] ? maps[k].get(v) ?? 0 : v);
+  return {
+    bounds() {
+      const bs = [grid, ...ctxs].map((g) => g.bounds()).filter(Boolean);
+      if (!bs.length) return null;
+      const min = [0, 1, 2].map((k) => Math.min(...bs.map((b) => b.min[k]))), max = [0, 1, 2].map((k) => Math.max(...bs.map((b) => b.max[k])));
+      return { min, max, size: [0, 1, 2].map((k) => max[k] - min[k] + 1) };
+    },
+    get(x, y, z) {
+      const v = grid.get(x, y, z);
+      if (v) return v;
+      for (let k = 0; k < ctxs.length; k++) { const w = ctxs[k].get(x, y, z); if (w) return id(k, w); }
+      return 0;
+    },
+    forEachIn(a, b, fn) {
+      grid.forEachIn(a, b, fn);
+      ctxs.forEach((c, k) => c.forEachIn(a, b, (x, y, z, v) => { if (!grid.get(x, y, z)) fn(x, y, z, id(k, v)); }));
+    },
+  };
+}
+
+/**
+ * One baker for several grids in the same coordinates (a room + its moving parts): the AO volume and the
+ * baked light field are computed once over all of them, then every model meshed with
+ * `bake: { baker }` samples it — much cheaper than `bake.context` per part when there are many lights.
+ * bake: { ao: true | { radius, rays }, light: true }.
+ */
+export function sharedBaker(grids, palette, bake = { ao: true, light: true }) {
+  const [main, ...rest] = grids;
+  const composite = rest.length ? withContext(main, palette, rest) : main;
+  const cls = new Uint8Array(palette.size);
+  for (let i = 1; i < palette.size; i++) cls[i] = palette.defs[i].kind + 1;
+  const hasLights = palette.defs.some((d) => d?.light);
+  return new Baker(composite, palette, cls, { ao: bake.ao, light: !!bake.light && hasLights && bake.light });
 }

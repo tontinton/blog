@@ -67,7 +67,7 @@ export class Baker {
       }
     }
     this.light = null;
-    if (opts.light) this.light = bakeLight(grid, palette, cls, opts.light === true ? {} : opts.light, opts.region);
+    if (opts.light) this.light = bakeLight(grid, palette, cls, opts.light === true ? {} : opts.light, opts.region, opts.spill);
   }
 
   /** occupancy at world cell (outside volume = empty) */
@@ -115,7 +115,7 @@ export class Baker {
   }
 }
 
-function bakeLight(grid, palette, cls, opts, region) {
+function bakeLight(grid, palette, cls, opts, region, spill = false) {
   const scale = opts.scale ?? 1;
   // group sources by (color, intensity, radius)
   const groups = new Map();
@@ -133,8 +133,9 @@ function bakeLight(grid, palette, cls, opts, region) {
     maxR = Math.max(maxR, L.radius);
   });
   if (!groups.size) return null;
-  // field bounds = sources ± radius, clipped to the grid (or region) bounds ± 1
-  const { lo: bmin, hi: bmax } = box(grid, region, 1);
+  // field bounds = sources ± radius, clipped to the grid (or region) bounds ± 1 (± reach with spill: light
+  // from context sources outside the region floods in through the context's air)
+  const { lo: bmin, hi: bmax } = box(grid, region, 1 + (spill ? reach : 0));
   const b = { min: bmin.map((v) => v + 1), max: bmax.map((v) => v - 1) };
   const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
   for (const g of groups.values()) {

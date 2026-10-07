@@ -65,7 +65,7 @@ const shadeOf = (shades, t) => shades[clamp(Math.floor(t * shades.length), 0, sh
 const R_ = (o) => o.R ?? rng(o.seed ?? 1);
 
 /** Fill the union of blobs [{ c:[x,y,z], r }] with noisy, height-shaded foliage. */
-export function foliage(g, blobs, o = {}) {
+export function foliage(g, blobs, o = {}) { // o.speckle: per-voxel shade randomness (0.2; 0 = smooth bands)
   const shades = list(o.leaves ?? ['leafDark', 'leaf', 'leafLight']);
   const N = noise(o.seed ?? 7);
   const freq = o.freq ?? 0.28, amp = o.roughness ?? 0.35, holes = o.holes ?? 0;
@@ -82,7 +82,7 @@ export function foliage(g, blobs, o = {}) {
     const n = N.simplex3(x * freq, y * freq, z * freq);
     if (d + n * amp > 1) continue;
     if (holes && d < 0.75 && N.simplex3(x * 0.5 + 9, y * 0.5, z * 0.5) > 1 - holes) continue;
-    const t = clamp((y - lo[1]) / Math.max(1, hi[1] - lo[1]) * 0.75 + (1 - d) * 0.15 + n * 0.25 + (hash3(x, y, z, 5) - 0.5) * 0.2 + (o.bias ?? 0));
+    const t = clamp((y - lo[1]) / Math.max(1, hi[1] - lo[1]) * 0.75 + (1 - d) * 0.15 + n * 0.25 + (hash3(x, y, z, 5) - 0.5) * (o.speckle ?? 0.2) + (o.bias ?? 0));
     g.put(x, y, z, shadeOf(shades, t), o.mode ?? 'keep');
   }
   return g;

@@ -136,13 +136,15 @@ const stage = new Stage({
     autoRotate: 0 (deg/s), idleRotate: 0 (deg/s after 6 s idle),
   },
   ui: { title, subtitle, credit, back: '/' | url | false, backLabel, hint: true | 'text' | false, loader: true, theme: 'auto'|'light'|'dark', css },
-  pixelRatio (max, default min(devicePixelRatio, 2)), adaptive: true (drop resolution when slow), msaa: 4, container, shotTime,
+  pixelRatio (max, default min(devicePixelRatio, 2)), adaptive: true (drop resolution when slow), msaa (4; 2 on hi-dpi), container, shotTime,
+  fps: { max: 60, idle: 30, idleAfter: 3 } (frame pacing: cap on fast screens, drop to `idle` fps when the camera hasn't moved for
+  `idleAfter` s — keeps laptops cool; `?fps=N` forces a rate),
 });
 ```
 
 | member | |
 |---|---|
-| `add(grid, opts)` → `THREE.Group` | mesh + add. opts: `palette`, `position`, `rotation` (deg Y or `[x,y,z]`), `scale`, `center` (`false` default → grid coords = world coords; `'bottom'`/`'center'`), `pivot: [x,y,z]` (group origin at this grid point — rotate a blade around its hub), `instances: [[x,y,z,rotY,scale] \| {position,rotation,scale}]`, `bake: { ao: true \| { radius: 6, rays: 20 }, light: true }`, `ao` (vertex AO, true), `greedy` (true), `hooks` (GLSL, below), `shading` (`'cel'` \| `['cel', 'rim']` — registered hook bundles), `cluster` (4: mesh as N×N-chunk columns, frustum-culled; 0 = one mesh), `keepGrid` (true; false frees the voxels after meshing), `shadow`, `receive`, `fit` (camera fit, true), `contact` (ground contact shadow, true), `name` |
+| `add(grid, opts)` → `THREE.Group` | mesh + add. opts: `palette`, `position`, `rotation` (deg Y or `[x,y,z]`), `scale`, `center` (`false` default → grid coords = world coords; `'bottom'`/`'center'`), `pivot: [x,y,z]` (group origin at this grid point — rotate a blade around its hub), `instances: [[x,y,z,rotY,scale] \| {position,rotation,scale}]`, `bake: { ao: true \| { radius: 6, rays: 20 }, light: true, context: grid \| [grids] }` (`context`: grids in the same coordinates that occlude/emit/block light during the bakes but aren't meshed — a moving part added with `pivot` = `position` gets the room's AO + baked lamp light; sync `add` only), `ao` (vertex AO, true), `greedy` (true), `hooks` (GLSL, below), `shading` (`'cel'` \| `['cel', 'rim']` — registered hook bundles), `cluster` (4: mesh as N×N-chunk columns, frustum-culled; 0 = one mesh), `keepGrid` (true; false frees the voxels after meshing), `shadow`, `receive`, `fit` (camera fit, true), `contact` (ground contact shadow, true), `name` |
 | `addAsync(grid, opts)` → Promise\<Group\> | `add` with cluster meshing + bakes in Web Workers (`workers: n \| 0`, `onProgress(f)`) |
 | `world(spec)` → Promise\<`{ group, grid, palette, assets, extras, stats }`\> | big scene from parallel region modules — see [big-scenes.md](big-scenes.md) |
 | `actors(opts)` → Actors | animated creatures (`{ creature, count, variants, behavior, area, path, target, on, … }`) — see [animation.md](animation.md) |
@@ -245,7 +247,7 @@ All accept `seed` (or `R`, an rng) and material overrides. Foliage uses `mode: '
 · `blossom` (pink clumpy oak) · `bush(g, p, { radius, leaves, lumps })` · `pine(g, p, { height, radius, tiers, leaves, snow })`
 · `palm(g, p, { height, lean, fronds, length, width, trunk, ring, leaves, coconut })` · `willow(g, p, {…oak, strands, strandLength})`
 · `branches(g, p, { height, depth, spread, trunk, tips })` (bare/dead tree) · `rock(g, p, { size: [x,y,z] | radius, stone: shades, moss, bury, facet })`
-· `foliage(g, [{ c, r }, …], { leaves, roughness, freq, squash, holes, bias, clipBelow })` (noisy blob union — custom canopies, hedges)
+· `foliage(g, [{ c, r }, …], { leaves, roughness, freq, squash, holes, bias, clipBelow, speckle })` (noisy blob union; `speckle` 0.2 = per-voxel shade randomness, lower for calmer canopies — custom canopies, hedges)
 · `grassTuft`, `flower(g, p, { height, petal, center, stem, shape: 'plus'|'dot'|'cup' })`, `mushroom`, `reeds`
 · `cloud(g, p, { length, height, depth, puffs, shades })` · `smoke(g, p, { height, drift: [dx,dz], puffs, spread })`
 · `scatter(g, (x,y,z,R,belowId) => …, { on: [ids], density, area: [[x0,z0],[x1,z1]], seed })` — run on air cells above matching voxels
@@ -290,6 +292,8 @@ All accept `seed` (or `R`, an rng) and material overrides. Foliage uses `mode: '
 - `loadVox(url, { materials: { [paletteIndex]: def }, palette, prefix, base, recenter })` → `{ grid, palette, ids }`;
   `parseVox(arrayBuffer, opts)`. Materials are named `vox<index>-<hex>`; translations are applied, rotations
   ignored; files without an RGBA chunk get a grey ramp.
+- Shared bakes: `sharedBaker([grid, ...partGrids], palette, { ao, light })` → pass `bake: { baker }` to every `stage.add` of
+  those grids: one AO volume + light field for a room and all its moving parts (far cheaper than `bake.context` per part).
 - Low level: `buildMesh(grid, palette, opts)`, `createVoxelMaterial`, `createVoxelDepthMaterial`,
   `createVoxelUniforms`, `Post`, `resolveLook`, `merge`, `LOOKS`, `DEFAULT_LOOK`, `PARTICLE_PRESETS`,
   `clusterChunks`, `clusterInputs`, `geometryFromArrays`, `WorkerPool`/`getPool`, `runRegion`, `runAssets`,

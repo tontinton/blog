@@ -65,7 +65,13 @@ export class Stage {
     this.actorSystems = [];
     this.time = 0;
     this.fixedTime = params.has('t') ? Number(params.get('t')) : this.shot ? opts.shotTime ?? 0 : null;
-    this.post = new Post(this.renderer, { samples: opts.msaa ?? 4 });
+    // 2 MSAA samples are plenty on hi-dpi screens (the pixels are already tiny), 4 on 1x screens
+    this.post = new Post(this.renderer, { samples: opts.msaa ?? (this.maxDpr >= 2 ? 2 : 4) });
+    // frame pacing: never faster than fps.max (a 120 Hz screen would otherwise render twice as often), and
+    // fps.idle once nobody has touched the camera for fps.idleAfter seconds — ambient animation (flicker,
+    // tails, particles) looks the same at 30 fps and the laptop stays cool. ?fps=N forces a rate.
+    this.fps = { max: 60, idle: 30, idleAfter: 3, ...(opts.fps ?? {}) };
+    if (params.has('fps')) this.fps.max = this.fps.idle = Number(params.get('fps'));
 
     // shared voxel uniforms (a model gets its own copy of uMat, the palette texture)
     this.uniforms = createVoxelUniforms({ texture: () => null });
@@ -83,6 +89,7 @@ export class Stage {
       minPolarAngle: (90 - cam.maxPitch) * DEG, maxPolarAngle: (90 - cam.minPitch) * DEG, rotateSpeed: 0.6, zoomSpeed: 0.9,
     });
     this.controls.addEventListener('start', () => { this._interacted = performance.now(); this.ui?.interacted(); });
+    this.controls.addEventListener('change', () => { this._active = performance.now(); });
     this.controls.addEventListener('change', () => { this._dirty = true; });
 
     // lights
@@ -736,7 +743,19 @@ export class Stage {
         this.frame();
         this.ui?.ready();
         if (!this.shot) {
-          const loop = () => { this._raf = requestAnimationFrame(loop); this.frame(); };
+          const loop = (now) => {
+            this._raf = requestAnimationFrame(loop);
+            const f = this.fps, active = this._active && (now - this._active) / 1000 < f.idleAfter;
+            const target = (this._target = active ? f.max : f.idle);
+            // time accumulator (keeps the phase, so rAF jitter doesn't halve the rate): render once a target
+            // interval has built up; 1 ms slack
+            const iv = target > 0 ? 1000 / target : 0;
+            this._acc = (this._acc ?? iv) + (now - (this._prevRaf ?? now));
+            this._prevRaf = now;
+            if (this._acc < iv - 1) return;
+            this._acc = Math.min(this._acc - iv, iv);
+            this.frame();
+          };
           this._raf = requestAnimationFrame(loop);
         }
         requestAnimationFrame(() => { window.VOXEL.ready = true; ok(this); });
@@ -790,7 +809,8 @@ export class Stage {
     const avg = this._ft.reduce((a, b) => a + b, 0) / this._ft.length;
     this._ft = [];
     const floor = this.maxDpr > 1 ? 1 : 0.75;
-    if (avg > 1 / 38 && this.dpr > floor) { this.dpr = Math.max(floor, this.dpr - 0.25); this.resize(); }
+    const slow = Math.max(1 / 38, 1.25 / Math.max(1, this._target || 60)); // frames slower than the pacing allows
+    if (avg > slow && this.dpr > floor) { this.dpr = Math.max(floor, this.dpr - 0.25); this.resize(); }
   }
 
   _render(t) {

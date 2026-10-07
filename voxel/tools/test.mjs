@@ -185,6 +185,20 @@ test('ray AO darker under an overhang', () => {
   assert.ok(under < open, `under ${under} vs open ${open}`);
 });
 
+test('bake.context: a separate part is lit and occluded by its context grid, which is not meshed', () => {
+  const room = new VoxelGrid(P).box([-8, -1, -8], [8, -1, 8], 'a').set(0, 0, 0, P.lamp).box([-3, 3, -3], [3, 3, 3], 'b');
+  const part = new VoxelGrid(P).box([2, 0, 0], [2, 0, 0], 'a');
+  const lone = buildMesh(part, P, { bake: { ao: true, light: true } });
+  const r = buildMesh(part, P, { bake: { ao: true, light: true, context: room } });
+  assert.equal(r.stats.quads, lone.stats.quads, 'context voxels must not be meshed');
+  const lt = r.solid.attributes.aLight, info = r.solid.attributes.aInfo;
+  let l = 0, ao = 0, aoLone = 0;
+  for (let i = 0; i < lt.count; i++) { l += lt.getX(i); ao += info.getW(i); aoLone += lone.solid.attributes.aInfo.getW(i); }
+  assert.ok(l > 0, 'lamp in the context lights the part');
+  assert.ok(!lone.solid.attributes.aLight || lone.stats.lights === 0, 'no light without context');
+  assert.ok(ao < aoLone, `context overhang darkens the part (${ao} vs ${aoLone})`);
+});
+
 // ---- misc ---------------------------------------------------------------------------------------
 test('rng/hash deterministic', () => {
   const a = rng(5), b = rng(5);

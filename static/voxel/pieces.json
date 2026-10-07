@@ -10,5 +10,20 @@
       "demo",
       "nature"
     ]
+  },
+  {
+    "slug": "family_autumn",
+    "short": "fam",
+    "title": "Family Autumn",
+    "description": "Our little family on a lazy autumn afternoon: the two of us on the sofa, the malamute by the fire, two British shorthairs, leaves falling outside the cabin.",
+    "date": "2026-10-06",
+    "preview": "/voxel/family_autumn/preview.jpg",
+    "tags": [
+      "family",
+      "interior",
+      "autumn",
+      "animals",
+      "animated"
+    ]
   }
 ]

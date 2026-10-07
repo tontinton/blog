@@ -20,7 +20,13 @@ stage.animate(blades, { spin: [0, 0, 0.9] });                 // rad/s around x,
 stage.animate(stage.add(boatGrid, { position: [6, -1, 12] }), { bob: 0.25, sway: 0.04, phase: 1.3 });
 stage.onUpdate((t, dt) => { door.rotation.y = Math.sin(t) * 0.5; });   // anything else, every frame
 ```
-`pivot` puts the group origin at that grid point — rotate around a hub/hinge. `fit: false` keeps a moving
+`pivot` puts the group origin at that grid point — rotate around a hub/hinge.
+**Moving parts that match the room's lighting.** Model the part in place (scene coordinates, rest pose) in
+its own grid, add it with `{ pivot: joint, position: joint, fit: false, bake: { ao: true, light: true, context: roomGrid } }`
+and the room as bake context: the part gets the same ray AO and baked lamp/fire light as if it were part of the room
+(and `context: [parts…]` on the room's own `add` lets the parts shade the room). Then rotate it in `onUpdate`.
+With many parts, build one `sharedBaker([room, ...parts], P)` and pass `bake: { baker }` to every add instead
+(computed once — see api.md). Used for character heads/tails/arms in `static/voxel/family_autumn/`. `fit: false` keeps a moving
 part from changing the camera framing. In big worlds a region emits an animated asset copy with
 `ctx.emit('prop', { asset: 'blades', position, pivot, animate: { spin: [0, 0, 1] } })` (see big-scenes.md).
 
