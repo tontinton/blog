@@ -128,6 +128,7 @@ cost the quads.
   frame (swaying leaves included — `look.sun.update: 'static'` freezes those; `N` updates every N frames).
 - **Face culling + draw order**: only the ≤ 3 face directions that can face the camera (or the sun, in the
   shadow pass) are drawn, front-to-back within each direction — half the vertices, less overdraw.
+- **Water is one pass**: refracting water reuses the opaque image instead of rendering the scene twice.
 - **Incremental frames**: when the camera rests, only what changed is redrawn (see api.md, "Render cache");
   a world with a few walkers and no wind redraws a few percent of its pixels per frame.
 - **Adaptive resolution**: the stage drops the pixel ratio in 0.25 steps when frames take > 26 ms

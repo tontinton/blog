@@ -1,7 +1,9 @@
 // Sun shadow map with a static cache. The 4096² shadow pass re-rasterized the whole scene every frame;
 // now still geometry is rendered into a cached depth map only when it changes (models added/moved for
 // the first time, look/sun/layout changes), and each frame the cache is blitted into the live map and only
-// the moving casters (actors, animated models, swaying leaves) are drawn on top. Face-direction culling
+// the moving casters (actors, animated models, swaying leaves) are drawn on top — and only inside their
+// texel rectangle (plus last update's, to erase where they were), so a walking cat restores a few
+// thousand texels instead of the whole 4096² map. Face-direction culling
 // draws only faces pointing away from the sun (what three renders into shadow maps).
 //
 // sun.update (look): 'always' (default) — moving casters every frame; N — every N frames;
@@ -13,7 +15,7 @@
 import * as THREE from './three.js';
 import { faceMask, setFaceGroups, useFaceGroups, bucketQuads } from './cull.js';
 
-const _a = new THREE.Vector3(), _b = new THREE.Vector3();
+const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _box = new THREE.Box3(), _tmp = new THREE.Box3(), _v4 = new THREE.Vector4();
 
 export class SunShadows {
   constructor(stage) {
@@ -87,7 +89,15 @@ export class SunShadows {
           sun.shadow.map = this.cache;
           try { this._draw([sun], still); } finally { sun.shadow.map = live; }
         }
-        if (due || fresh) { groups(moving); this._draw([sun], moving, this.cache); changed = true; }
+        if (due || fresh) {
+          // only the texels the movers cover now or covered last time need restoring + redrawing
+          const now = this._region(moving);
+          const rect = fresh || !now || !this.prev ? null : unionRect(now, this.prev);
+          this.prev = now;
+          groups(moving);
+          this._draw([sun], moving, this.cache, rect);
+          changed = true;
+        }
       }
       this.stats = { still: still.length / 2, moving: moving.length / 2, renders: this.stats.renders + (changed ? 1 : 0) };
     }
@@ -107,16 +117,59 @@ export class SunShadows {
     return changed;
   }
 
+  // texel rect [x0, y0, x1, y1] of the sun shadow map covering the moving casters, or null (unknown bounds)
+  _region(moving) {
+    const s = this.stage, sh = s.sun.shadow, cam = sh.camera, size = sh.mapSize;
+    sh.updateMatrices(s.sun);
+    _box.makeEmpty();
+    for (let i = 0; i < moving.length; i += 2) {
+      const o = moving[i], part = moving[i + 1];
+      if (part === 'sway' && !o.isInstancedMesh) {
+        const b = o.geometry.userData.boxes?.sway;
+        if (!b) return null;
+        for (let k = 0; k < b.length; k += 6) {
+          _tmp.min.set(b[k], b[k + 1], b[k + 2]); _tmp.max.set(b[k + 3], b[k + 4], b[k + 5]);
+          _box.union(_tmp.expandByScalar(0.5).applyMatrix4(o.matrixWorld));
+        }
+        continue;
+      }
+      const ps = s.particleSystems.find((p) => p.object === o);
+      if (ps) {
+        const u = ps.uniforms, pad = (u.uSize.value ?? 0.5) * 2 + 1;
+        _tmp.min.copy(u.uBoxMin.value); _tmp.max.copy(u.uBoxMin.value).add(u.uBoxSize.value);
+        _box.union(_tmp.expandByScalar(pad));
+        continue;
+      }
+      if (o.isInstancedMesh) o.computeBoundingBox();
+      const bb = o.isInstancedMesh ? o.boundingBox : (o.geometry.boundingBox ?? (o.geometry.computeBoundingBox(), o.geometry.boundingBox));
+      if (!bb || bb.isEmpty() || !o.isMesh) return null;
+      _box.union(_tmp.copy(bb).applyMatrix4(o.matrixWorld).expandByScalar(1)); // legs, tails, vertex hooks
+    }
+    if (_box.isEmpty()) return [0, 0, 0, 0];
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (let i = 0; i < 8; i++) {
+      _a.set(i & 1 ? _box.max.x : _box.min.x, i & 2 ? _box.max.y : _box.min.y, i & 4 ? _box.max.z : _box.min.z).project(cam);
+      const x = (_a.x * 0.5 + 0.5) * size.x, y = (_a.y * 0.5 + 0.5) * size.y;
+      x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+    }
+    return [Math.max(0, Math.floor(x0) - 2), Math.max(0, Math.floor(y0) - 2), Math.min(size.x, Math.ceil(x1) + 2), Math.min(size.y, Math.ceil(y1) + 2)];
+  }
+
   // render `lights`' shadow maps with only the casters in `list` (pairs [object, part]); `base`: a depth
   // target blitted into the map instead of clearing it
-  _draw(lights, list, base = null) {
+  _draw(lights, list, base = null, rect = null) {
     const s = this.stage, r = s.renderer, sm = r.shadowMap;
     const keep = new Set();
     for (let i = 0; i < list.length; i += 2) keep.add(list[i]);
     const off = [];
     s.scene.traverse((o) => { if (o.castShadow && !o.isLight && !keep.has(o)) { o.castShadow = false; off.push(o); } });
     const clear = r.clear;
-    if (base) r.clear = function (...args) { return r.getRenderTarget() === lights[0].shadow.map ? blitDepth(r, base, lights[0].shadow.map) : clear.apply(this, args); };
+    if (base) r.clear = function (...args) {
+      if (r.getRenderTarget() !== lights[0].shadow.map) return clear.apply(this, args);
+      blitDepth(r, base, lights[0].shadow.map, rect);
+      // three resets the scissor when it leaves the shadow pass (setRenderTarget)
+      if (rect) { r.state.setScissorTest(true); r.state.scissor(_v4.set(rect[0], rect[1], rect[2] - rect[0], rect[3] - rect[1])); }
+    };
     try {
       sm.needsUpdate = true;
       this._orig(lights, s.scene, this.camera);
@@ -138,11 +191,14 @@ function depthTarget(w, h) {
   return rt;
 }
 
-function blitDepth(r, src, dst) {
+function blitDepth(r, src, dst, rect = null) {
   const gl = r.getContext(), st = r.state, P = r.properties;
+  const [x0, y0, x1, y1] = rect ?? [0, 0, src.width, src.height];
   st.bindFramebuffer(gl.READ_FRAMEBUFFER, P.get(src).__webglFramebuffer);
   st.bindFramebuffer(gl.DRAW_FRAMEBUFFER, P.get(dst).__webglFramebuffer);
   st.buffers.depth.setMask(true);
-  gl.blitFramebuffer(0, 0, src.width, src.height, 0, 0, dst.width, dst.height, gl.DEPTH_BUFFER_BIT, gl.NEAREST);
+  gl.blitFramebuffer(x0, y0, x1, y1, x0, y0, x1, y1, gl.DEPTH_BUFFER_BIT, gl.NEAREST);
   st.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
 }
+
+const unionRect = (a, b) => [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];

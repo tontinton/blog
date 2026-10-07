@@ -322,7 +322,9 @@ vVLight = aLight.rgb;
  *   uniforms   shared uniform object (from createVoxelUniforms) — required
  *   light      true if the geometry has baked light (aLight)
  *   transparent  water/glass pass (MeshPhysical + transmission)
- *   transmission true → refraction (renders an extra opaque pass); false → alpha blend
+ *   transmission true → refraction; false → alpha blend
+ *   refraction   { map, size, rect, on } uniforms: refract the stage's own opaque image (post.js) instead of
+ *                letting three render the whole opaque scene a second time into its transmission target
  *   hooks      GLSL injections (see top of file)
  *   rig        true for rigged instanced geometry (aPart + uRig/uRigStride uniforms, see actors.js)
  */
@@ -330,13 +332,19 @@ export function createVoxelMaterial(opts) {
   const { uniforms, light, transparent, hooks } = opts;
   const transmission = transparent && opts.transmission !== false;
   const ibl = !!uniforms.uIbl; // precomputed flat-face IBL (ibl.js)
+  // own refraction: three's transmission shader code (USE_TRANSMISSION) without three's transmission pass —
+  // transmission 0 on the material so three neither re-renders the opaque scene nor sets these uniforms;
+  // drawn with the transparent objects after the stage copied its opaque image (no blending, like three)
+  const refr = transmission && opts.refraction;
   const mat = transparent
-    ? new THREE.MeshPhysicalMaterial({ roughness: 1, metalness: 0, transmission: transmission ? 1 : 0, thickness: 1.5, ior: 1.33, transparent: !transmission, opacity: 1, depthWrite: true, specularIntensity: 1 })
+    ? new THREE.MeshPhysicalMaterial({ roughness: 1, metalness: 0, transmission: transmission && !refr ? 1 : 0, thickness: 1.5, ior: 1.33, transparent: !transmission || !!refr, opacity: 1, depthWrite: true, specularIntensity: 1 })
     : new THREE.MeshStandardMaterial({ roughness: 1, metalness: 1 });
+  if (refr) mat.blending = THREE.NoBlending;
   mat.metalness = transparent ? 0 : 1; // per-voxel metalness multiplies this
   mat.defines = { ...(mat.defines ?? {}), VOXEL: 1 };
   if (light) mat.defines.VOXEL_LIGHT = 1;
   if (transparent) mat.defines.VOXEL_WATER = 1;
+  if (refr) mat.defines.USE_TRANSMISSION = '';
   if (opts.rig) mat.defines.VOXEL_RIG = 1;
   mat.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms);
@@ -364,13 +372,25 @@ export function createVoxelMaterial(opts) {
         .replace('#include <transmission_fragment>', C.transmission_fragment.replace('material.transmission = transmission;', 'material.transmission = transmission * (1.0 - matT(mid, 11).x);'))
         .replace('#include <lights_physical_fragment>', C.lights_physical_fragment.replace('material.ior = ior;', 'material.ior = matT(mid, 11).y;'))
         .replace('#include <opaque_fragment>', `#include <opaque_fragment>\n#ifndef USE_TRANSMISSION\ngl_FragColor.a = mix(0.25, 1.0, matT(mid, 11).x);\n#endif`);
+      if (refr) {
+        Object.assign(shader.uniforms, {
+          transmission: refr.on, thickness: { value: 1.5 }, attenuationDistance: { value: Infinity }, attenuationColor: { value: new THREE.Color(1, 1, 1) },
+          transmissionSamplerMap: refr.map, transmissionSamplerSize: refr.size, uVxRefr: refr.rect,
+        });
+        // the copy covers the whole frame; a partial (sub-frustum) render maps its screen coords into it
+        const re = /refractionCoords \/= 2\.0;/g;
+        const pars = C.transmission_pars_fragment.replace('uniform vec2 transmissionSamplerSize;', 'uniform vec2 transmissionSamplerSize; uniform vec4 uVxRefr;')
+          .replace(re, 'refractionCoords /= 2.0; refractionCoords = uVxRefr.xy + refractionCoords * uVxRefr.zw;');
+        if (!C.transmission_pars_fragment.includes('refractionCoords /= 2.0;')) console.warn('voxel: refraction patch failed (three version changed?)');
+        shader.fragmentShader = shader.fragmentShader.replace('#include <transmission_pars_fragment>', pars);
+      }
       if (!shader.fragmentShader.includes('matT(mid, 11).y')) console.warn('voxel: ior patch failed (three version changed?)');
     }
     applyHooks(shader, hooks);
     mat.userData.shader = shader;
   };
   const hk = hookKey(hooks);
-  mat.customProgramCacheKey = () => `voxel-${transparent ? (transmission ? 't' : 'a') : 's'}-${light ? 1 : 0}-${opts.rig ? 'r' : ''}-${ibl ? 'i' : ''}-${hk}`;
+  mat.customProgramCacheKey = () => `voxel-${transparent ? (refr ? 'o' : transmission ? 't' : 'a') : 's'}-${light ? 1 : 0}-${opts.rig ? 'r' : ''}-${ibl ? 'i' : ''}-${hk}`;
   return mat;
 }
 

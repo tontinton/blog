@@ -75,6 +75,11 @@ const MERGE = /* glsl */ `
 ${SCENE_TEX}
 varying vec2 vUv;
 void main() { gl_FragColor = sceneTex(vUv); }`;
+// three's transmission target: opaque objects over a white, alpha 0.5 clear (premultiplied → 0.5 everywhere);
+// ours is premultiplied over (0, 0, 0, 0)
+const REFR_COPY = /* glsl */ `
+uniform sampler2D tSrc; varying vec2 vUv;
+void main() { vec4 s = texture2D(tSrc, vUv); gl_FragColor = s + (1.0 - s.a) * vec4(0.5); }`;
 const DEPTH_COPY = /* glsl */ `
 uniform sampler2D tDepth; varying vec2 vUv;
 void main() { gl_FragDepth = texture2D(tDepth, vUv).r; }`;
@@ -378,6 +383,9 @@ export class Post {
     this.variants = new Map();
     this.mCopy = fsMaterial(COPY, { tSrc: { value: null } });
     this.mDiff = fsMaterial(DIFF, { tSrc: { value: null }, tBase: { value: null }, uInvStep: { value: 1 } });
+    // refraction source for water/glass (material.js `refraction`): the opaque scene, copied with mipmaps
+    this.refr = { map: { value: null }, size: { value: new THREE.Vector2(1, 1) }, rect: { value: new THREE.Vector4(0, 0, 1, 1) }, on: { value: 1 } };
+    this.mRefr = fsMaterial(REFR_COPY, { tSrc: { value: null } });
     this.mDepthCopy = new THREE.ShaderMaterial({ vertexShader: FSQ_VERT, fragmentShader: DEPTH_COPY, uniforms: { tDepth: { value: null } }, depthTest: true, depthWrite: true, depthFunc: THREE.AlwaysDepth, colorWrite: false });
   }
 
@@ -438,22 +446,59 @@ export class Post {
    * Draw the scene into the HDR MSAA target. rects: null = the whole frame; [{ x, y, w, h }] = only those
    * pixels (everything else keeps what the target held), each through a sub-frustum camera
    * (setViewOffset) so three frustum-culls the clusters outside the rect.
+   * split: { opaque(), transparent(), restore() } — refracting water: draw the opaque objects, copy them
+   * as the refraction source, then draw the transparent ones on top (instead of three's transmission
+   * pass, which re-renders every opaque object into a second full-size target).
    */
-  renderScene(scene, camera, rects = null) {
+  renderScene(scene, camera, rects = null, split = null) {
     const r = this.renderer, rt = this.scene;
     const prevClear = r.getClearColor(_c), prevAlpha = r.getClearAlpha();
     r.setClearColor(0x000000, 0);
+    const info = { calls: 0, triangles: 0 };
+    const pass = () => { r.setRenderTarget(rt); r.render(scene, camera); info.calls += r.info.render.calls; info.triangles += r.info.render.triangles; };
+    const draw = (q) => (split ? this.splitDraw(split, () => pass(), rt, q) : pass());
     if (!rects) {
-      r.setRenderTarget(rt);
-      r.render(scene, camera);
-      this.sceneInfo = { calls: r.info.render.calls, triangles: r.info.render.triangles }; // before post passes reset it
+      draw(null);
+      this.sceneInfo = info; // main scene pass only (shadows, reflection and post excluded)
     } else {
       for (const q of rects) this._scissored(rt, q, () => {
         camera.setViewOffset(this.w, this.h, q.x, this.h - q.y - q.h, q.w, q.h);
-        try { r.setRenderTarget(rt); r.render(scene, camera); } finally { camera.clearViewOffset(); }
+        try { draw(q); } finally { camera.clearViewOffset(); }
       }, true);
     }
     r.setClearColor(prevClear, prevAlpha);
+  }
+
+  /**
+   * Opaque objects → copy (the refraction source) → transparent objects, all into `target` (render(): one
+   * renderer.render call). q: the rect being redrawn (sub-frustum), key: which refraction target (each
+   * view keeps its own, so a partial redraw finds the rest of it from earlier frames).
+   */
+  splitDraw(split, render, target, q = null, key = 'main') {
+    const r = this.renderer;
+    try {
+      split.opaque();
+      render();
+      this._refraction(target, q, key);
+      split.transparent();
+      const ac = r.autoClear;
+      r.autoClear = false;
+      try { render(); } finally { r.autoClear = ac; }
+    } finally { split.restore(); }
+  }
+
+  // target's (resolved) opaque image → mipmapped refraction source for the voxel water/glass material
+  _refraction(src, q, key) {
+    const W = src.width, H = src.height;
+    this.refrTargets ??= {};
+    let t = this.refrTargets[key];
+    if (!t) t = this.refrTargets[key] = new THREE.WebGLRenderTarget(W, H, { type: THREE.HalfFloatType, depthBuffer: false, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter });
+    if (t.width !== W || t.height !== H) t.setSize(W, H);
+    this.mRefr.uniforms.tSrc.value = src.texture;
+    this._scissored(t, q, () => this._pass(this.mRefr, t)); // three regenerates the mip chain after the pass
+    this.refr.map.value = t.texture;
+    this.refr.size.value.set(W, H);
+    this.refr.rect.value.set(q ? q.x / W : 0, q ? q.y / H : 0, q ? q.w / W : 1, q ? q.h / H : 1);
   }
 
   /** Copy the scene target's (resolved) color into light layer i (rects: only those pixels). */
@@ -596,8 +641,8 @@ export class Post {
   }
 
   dispose() {
-    [this.scene, this.dofTarget, this.mergeTarget, this.particleTarget, ...this.layerTargets, ...this.down, ...this.up].forEach((t) => t?.dispose());
-    [this.mDown, this.mUp, this.mDof, this.mCopy, this.mDiff, this.mDepthCopy, ...this.variants.values()].forEach((m) => m.dispose());
+    [this.scene, this.dofTarget, this.mergeTarget, this.particleTarget, ...Object.values(this.refrTargets ?? {}), ...this.layerTargets, ...this.down, ...this.up].forEach((t) => t?.dispose());
+    [this.mDown, this.mUp, this.mDof, this.mCopy, this.mDiff, this.mRefr, this.mDepthCopy, ...this.variants.values()].forEach((m) => m.dispose());
     this.quad.dispose();
   }
 }

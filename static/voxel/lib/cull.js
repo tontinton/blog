@@ -17,8 +17,12 @@ const _inv = new THREE.Matrix4(), _v = new THREE.Vector3();
  *   back: true → faces pointing away (three renders back faces into shadow maps)
  */
 export function faceMask(mesh, { dir, pos, back = false }) {
-  if (mesh.isInstancedMesh || !mesh.geometry.userData.ranges) return ALL;
-  _inv.copy(mesh.matrixWorld).invert();
+  if (!mesh.geometry.userData.ranges) return ALL;
+  if (mesh.isInstancedMesh) {
+    // a rotation class (stage.js): every instance turned the same way — directions only (ortho / sun)
+    if (!mesh.userData.instRot || !dir) return ALL;
+    _inv.copy(mesh.matrixWorld).multiply(mesh.userData.instRot).invert();
+  } else _inv.copy(mesh.matrixWorld).invert();
   let mask = 0;
   if (dir) {
     // normals transform with the inverse transpose, so n·d in world = n_local·(M⁻¹ d)

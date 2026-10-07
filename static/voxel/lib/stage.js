@@ -338,25 +338,31 @@ export class Stage {
       solid: createVoxelMaterial({ uniforms, light, hooks }),
       depth: createVoxelDepthMaterial({ uniforms, hooks }),
       distance: createVoxelDepthMaterial({ uniforms, hooks, distance: true }),
-      transparent: results.some((r) => r.transparent) ? createVoxelMaterial({ uniforms, light, transparent: true, transmission: this.look.water.transmission, hooks }) : null,
+      transparent: results.some((r) => r.transparent) ? createVoxelMaterial({ uniforms, light, transparent: true, transmission: this.look.water.transmission, refraction: this.post.refr, hooks }) : null,
     };
     model.materials = mats;
     // [material]: three draws geometry.groups, which face culling (cull.js) points at the visible directions
+    // instances are drawn in rotation classes (0/90/180/270° about Y): within a class every copy's faces
+    // point the same way, so face culling works for instances too (cull.js). Any other rotation → 'free'.
+    const classes = inst ? rotationClasses(inst) : null;
     const make = (geo, mat) => {
-      if (!inst) { const m = new THREE.Mesh(geo, [mat]); m.userData.voxelModel = model; setFaceGroups(m); return m; }
-      const m = new THREE.InstancedMesh(geo, [mat], inst.length);
-      m.userData.voxelModel = model;
-      setFaceGroups(m);
-      inst.forEach((M, i) => m.setMatrixAt(i, M));
-      m.instanceMatrix.needsUpdate = true;
-      m.computeBoundingBox(); m.computeBoundingSphere();
-      return m;
+      if (!inst) { const m = new THREE.Mesh(geo, [mat]); m.userData.voxelModel = model; setFaceGroups(m); return [m]; }
+      return classes.map((c, k) => {
+        const m = new THREE.InstancedMesh(k ? shareGeometry(geo) : geo, [mat], c.index.length);
+        m.userData.voxelModel = model;
+        m.userData.instIndex = c.index;
+        if (c.rot) m.userData.instRot = c.rot;
+        setFaceGroups(m);
+        c.index.forEach((j, i) => m.setMatrixAt(i, inst[j]));
+        m.instanceMatrix.needsUpdate = true;
+        m.computeBoundingBox(); m.computeBoundingSphere();
+        return m;
+      });
     };
     const cull = results.length > 1 || !!inst;
     const stats = { quads: 0, triangles: 0, bakeMs: 0, lights: 0, clusters: results.length };
     for (const r of results) {
-      if (r.solid) {
-        const mesh = make(r.solid, mats.solid);
+      if (r.solid) for (const mesh of make(r.solid, mats.solid)) {
         mesh.customDepthMaterial = mats.depth;
         mesh.customDistanceMaterial = mats.distance;
         mesh.castShadow = opts.shadow !== false; mesh.receiveShadow = opts.receive !== false;
@@ -365,8 +371,7 @@ export class Stage {
         inner.add(mesh);
         model.meshes.push(mesh);
       }
-      if (r.transparent) {
-        const mesh = make(r.transparent, mats.transparent);
+      if (r.transparent) for (const mesh of make(r.transparent, mats.transparent)) {
         mesh.receiveShadow = true; mesh.castShadow = false; mesh.frustumCulled = cull;
         mesh.renderOrder = 1;
         mesh.userData.kind = 'transparent';
@@ -433,13 +438,14 @@ export class Stage {
     if (!hit) return null;
     const model = owner.get(hit.object);
     const M = hit.object.matrixWorld.clone();
-    if (hit.instanceId != null) M.multiply(model.instances[hit.instanceId]);
+    const instance = hit.instanceId == null ? null : hit.object.userData.instIndex?.[hit.instanceId] ?? hit.instanceId;
+    if (instance != null) M.multiply(model.instances[instance]);
     const local = hit.point.clone().applyMatrix4(M.invert());
     const n = hit.face.normal;
     const voxel = [Math.floor(local.x - n.x * 0.5), Math.floor(local.y - n.y * 0.5), Math.floor(local.z - n.z * 0.5)];
     const info = hit.object.geometry.attributes.aInfo;
     const id = model.grid ? model.grid.get(...voxel) : info.getX(hit.face.a) + info.getY(hit.face.a) * 256;
-    return { model, group: model.group, voxel, id, name: model.palette.defs[id]?.name ?? null, normal: [n.x, n.y, n.z], point: hit.point, instance: hit.instanceId ?? null };
+    return { model, group: model.group, voxel, id, name: model.palette.defs[id]?.name ?? null, normal: [n.x, n.y, n.z], point: hit.point, instance };
   }
 
   /** Add any THREE.Object3D (opts.fit: include in camera fit, default false). */
@@ -922,8 +928,10 @@ export class Stage {
     this.scene.updateMatrixWorld();
     this._trackMotion();
     const rc = this.renderCache;
-    // the floor reflection is drawn with every light at its real intensity: no light layers with it
-    rc.noLayers = this.models.some((m) => m.nonLinear) || (this.look.ground.reflect > 0 && this.look.ground.type !== 'none');
+    // the floor reflection is drawn with every light at its real intensity: no light layers with it; nor
+    // with refracting water (its refraction source holds one layer at a time)
+    const split = this._split();
+    rc.noLayers = this.models.some((m) => m.nonLinear) || (this.look.ground.reflect > 0 && this.look.ground.type !== 'none') || !!split;
     const plan = rc.plan();
     if (force && plan.mode !== 'full') { plan.mode = 'full'; plan.seed = rc.layered.length > 0; plan.rects = null; }
     if (plan.mode === 'skip') return false;
@@ -943,14 +951,14 @@ export class Stage {
       }
     }
     this._updateIbl(this.camera);
-    this._renderReflection();
+    this._renderReflection(split);
     this._cullFaces(this.camera);
     // plain full frames draw particles in the scene pass; cached frames composite them as their own layer
     const plain = plan.mode === 'full' && !plan.seed, layered = plain ? [] : rc.layered;
     const parts = this.particleSystems.some((p) => p.object.visible);
     if (plain) this.camera.layers.enable(PARTICLE_LAYER);
     try {
-      if (plan.mode === 'full' || plan.mode === 'partial') this._drawScene(plan.mode === 'full' ? null : plan.rects, layered);
+      if (plan.mode === 'full' || plan.mode === 'partial') this._drawScene(plan.mode === 'full' ? null : plan.rects, layered, split);
     } finally { this.camera.layers.disable(PARTICLE_LAYER); }
     // light layer weights: each layer was drawn at intensity 1 in white (+ d/dposition layers × offset)
     const K = this.post.su.uLayerK.value;
@@ -967,6 +975,21 @@ export class Stage {
     return true;
   }
 
+  // refracting water/glass in view → draw opaque objects, copy them (the refraction source), then the
+  // transparent objects (post.renderScene); null when there's none
+  _split() {
+    const water = this.models.some((m) => m.transparent?.material[0].defines?.USE_TRANSMISSION !== undefined && isShown(m.transparent));
+    if (!water) return null;
+    const opaque = [], transparent = [];
+    this.scene.traverseVisible((o) => {
+      if (!(o.isMesh || o.isPoints || o.isLine || o.isSprite)) return;
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      (mats.some((m) => m.transparent || m.transmission > 0) ? transparent : opaque).push(o);
+    });
+    const show = (list, v) => { for (const o of list) o.visible = v; };
+    return { opaque: () => show(transparent, false), transparent: () => { show(transparent, true); show(opaque, false); }, restore: () => { show(opaque, true); show(transparent, true); } };
+  }
+
   // flat-face IBL tables (ibl.js) for every palette in use, for this camera
   _updateIbl(camera) {
     const pals = new Set(this.models.map((m) => m.palette));
@@ -976,8 +999,8 @@ export class Stage {
 
   // scene pass(es) into the persistent scene target: rects null = everything. With light layers: each layer
   // (only that light, at intensity 1) is drawn and copied out, then the scene without the layered lights.
-  _drawScene(rects, layered) {
-    const post = this.post, draw = (r) => post.renderScene(this.scene, this.camera, r);
+  _drawScene(rects, layered, split = null) {
+    const post = this.post, draw = (r) => post.renderScene(this.scene, this.camera, r, split);
     if (!layered.length) return draw(rects);
     const geo = rects ? rects.filter((r) => !r.emissive) : null; // flickering voxels only change the base layer
     if (!rects || geo.length) {
@@ -1024,7 +1047,7 @@ export class Stage {
     }
   }
 
-  _renderReflection() {
+  _renderReflection(split = null) {
     const G = this.look.ground, gu = this.ground.material.userData.uniforms;
     if (!(G.reflect > 0) || G.type === 'none') { gu.uReflect.value.x = 0; return; }
     const w = Math.max(1, Math.round((this.w * this.dpr) / 2)), h = Math.max(1, Math.round((this.h * this.dpr) / 2));
@@ -1053,7 +1076,11 @@ export class Stage {
     this._cullFaces(vc);
     const ibl = this.ibl.on.y;
     this.ibl.on.y = 0; // the radiance table is for the main camera's view direction
-    try { r.render(this.scene, vc); } finally { this.ibl.on.y = ibl; }
+    try {
+      // (classified again: the ground is hidden for this pass and must stay hidden)
+      if (split) this.post.splitDraw(this._split(), () => { r.setRenderTarget(this._reflRT); r.render(this.scene, vc); }, this._reflRT, null, 'reflection');
+      else r.render(this.scene, vc);
+    } finally { this.ibl.on.y = ibl; }
     r.setClearColor(prevColor, prevAlpha);
     this.ground.visible = true;
     gu.uRefl.value = this._reflRT.texture;
@@ -1177,6 +1204,34 @@ export class Stage {
 
 // ---- helpers -------------------------------------------------------------------------------------
 
+// split instance matrices by rotation about Y in 90° steps (positive scale, no tilt): [{ rot, index }]
+function rotationClasses(list) {
+  const out = new Map();
+  const c0 = new THREE.Vector3(), c1 = new THREE.Vector3(), c2 = new THREE.Vector3();
+  list.forEach((M, i) => {
+    M.extractBasis(c0, c1, c2);
+    c0.normalize(); c1.normalize(); c2.normalize();
+    let k = 'free';
+    if (Math.abs(c1.y - 1) < 1e-6 && Math.abs(c0.y) < 1e-6 && c2.dot(c0.clone().cross(c1)) > 0) {
+      const a = Math.round(Math.atan2(-c0.z, c0.x) / (Math.PI / 2));
+      if (Math.abs(Math.atan2(-c0.z, c0.x) - a * (Math.PI / 2)) < 1e-5) k = ((a % 4) + 4) % 4;
+    }
+    if (!out.has(k)) out.set(k, { rot: k === 'free' ? null : new THREE.Matrix4().makeRotationY((k * Math.PI) / 2), index: [] });
+    out.get(k).index.push(i);
+  });
+  return [...out.values()];
+}
+
+// a geometry with the same GPU buffers but its own draw groups (one per instanced rotation class)
+function shareGeometry(geo) {
+  const g = new THREE.BufferGeometry();
+  for (const k in geo.attributes) g.setAttribute(k, geo.attributes[k]);
+  g.setIndex(geo.index);
+  g.boundingBox = geo.boundingBox; g.boundingSphere = geo.boundingSphere;
+  g.userData = { ranges: geo.userData.ranges, boxes: geo.userData.boxes };
+  return g;
+}
+
 function instanceMatrix(it) {
   if (it.isMatrix4) return it;
   const o = Array.isArray(it) ? { position: it.slice(0, 3), rotation: it[3] ?? 0, scale: it[4] ?? 1 } : it;
@@ -1186,6 +1241,11 @@ function instanceMatrix(it) {
 }
 
 const _view = new THREE.Vector3();
+
+function isShown(o) {
+  for (let p = o; p; p = p.parent) if (!p.visible) return false;
+  return true;
+}
 
 function sunDir(az, el) {
   return new THREE.Vector3(Math.cos(el * DEG) * Math.sin(az * DEG), Math.sin(el * DEG), Math.cos(el * DEG) * Math.cos(az * DEG)).normalize();

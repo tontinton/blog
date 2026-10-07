@@ -192,9 +192,12 @@ export class RenderCache {
         const bx = mesh.geometry.userData.boxes;
         if (!bx) continue;
         src = `anim ${m.group.name}`;
-        if (wind && bx.sway) addBoxes(bx.sway, mesh.matrixWorld, 0.5, (b) => add(b, mesh.castShadow && U !== 'static'));
-        if (bx.flicker) addBoxes(bx.flicker, mesh.matrixWorld, 0.05, (b) => add(b, false, true));
-        if (water && bx.water) addBoxes(bx.water, mesh.matrixWorld, 0.05, (b) => add(b, false));
+        // instances: the boxes are per copy — use the bounds of all copies
+        const each = mesh.isInstancedMesh ? (list, pad, fn) => { if (list?.length) { mesh.computeBoundingBox(); fn(_b2.copy(mesh.boundingBox).expandByScalar(pad).applyMatrix4(mesh.matrixWorld)); } }
+          : (list, pad, fn) => list && addBoxes(list, mesh.matrixWorld, pad, fn);
+        if (wind) each(bx.sway, 0.5, (b) => add(b, mesh.castShadow && U !== 'static'));
+        each(bx.flicker, 0.05, (b) => add(b, false, true));
+        if (water) each(bx.water, 0.05, (b) => add(b, false));
       }
     }
     // actors: every agent, every frame (legs, tails, heads move even when standing)

@@ -162,3 +162,8 @@ MeshStandard/Physical chunks by string — if you bump three, run a lab shot and
 - `cull.js`: per-direction draw groups (the mesher sorts quads into 12 direction × still/sway buckets,
   front-to-back inside each; meshes use `[material]` + `geometry.groups`).
 - `ibl.js`: per-palette table of env lookups for flat faces (ortho camera), read by the voxel shader.
+- Refracting water/glass: three's transmission shader code, but not three's transmission pass (which
+  re-renders every opaque object into a second full-size target each frame): `post.renderScene` draws the
+  opaque objects, copies them into a mipmapped refraction source (laid out like three's target), then the
+  transparent ones (`post.splitDraw`; the reflection pass does the same with its own source).
+- Instances are drawn in rotation classes (0/90/180/270° about Y) so face culling works for them too.
