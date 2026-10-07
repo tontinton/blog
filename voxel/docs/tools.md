@@ -33,7 +33,8 @@ branch name lowercased with non-alphanumerics → `-`, cut to 28 chars). After `
 node preview.mjs                 # waits for the build, prints both URLs + links to the pieces changed vs main
 node preview.mjs cot             # just this piece (short name or slug); --wait 600, --sha <commit>
 ```
-Production (`https://tontinton.com/...`) updates when the branch is merged. `voxel/lab/` scenes are not
+Production (`https://tontinton.com/...`) updates when the branch is merged. `static/_headers` sends `Cache-Control: no-cache`
+for `/voxel/*` and `/v/*`, so browsers revalidate every module on load and a deploy shows up without a hard refresh. `voxel/lab/` scenes are not
 published — only `static/` is.
 
 ## Screenshots (the main feedback loop)
