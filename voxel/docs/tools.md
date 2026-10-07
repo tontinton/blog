@@ -39,8 +39,7 @@ Cache busting: tontinton.com sits behind Cloudflare's edge cache, which can keep
 deploy (a hard refresh doesn't help). `links.mjs` therefore stamps each piece's `index.html` with an import
 map giving every module (piece files + `static/voxel/lib/**`) a content-hash query (`./people.js?v=3f2a…`)
 and loads `./scene.js?v=…`: a changed file gets a new URL, unchanged ones stay cached. Rerun
-`node links.mjs` after any edit (test.mjs fails when a hash is stale). `static/_headers` also sends
-`Cache-Control: no-cache` for `/voxel/*` and `/v/*`. (Module workers — `stage.world` — don't see import maps.) `voxel/lab/` scenes are not
+`node links.mjs` after any edit (test.mjs fails when a hash is stale). (Module workers — `stage.world` — don't see import maps.) `voxel/lab/` scenes are not
 published — only `static/` is.
 
 ## Screenshots (the main feedback loop)
