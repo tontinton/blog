@@ -59,6 +59,9 @@ commit and a direct link to the piece on the branch preview, e.g.
 - Y up, inclusive box ranges, grid coords = world coords (particles/lights use the same space).
 - Shapes are grid methods (`g.sphere`), generators are functions (`oak(g, p, opts)`).
 - 2–4 shades per material + jitter/noise; emissive 3–8 with `light: { radius }` for lamps; bloom threshold ≥ 1.4.
-- Keep pieces ≤ ~1.5M voxels / ~300k quads (`stats()` is printed by shot.mjs).
+- Keep pieces ≤ ~1.5M voxels / ~300k quads (`stats()` is printed by shot.mjs). Frame cost: `node bench.mjs
+  /voxel/<slug>/` (how frames are drawn — skip / post / partial % / full — and ms; `docs/tools.md`). Rendering
+  is incremental: wind sway everywhere, roaming lights or a glossy floor force full frames; flickering a
+  light's intensity/color is free; your own uniform/material changes need `stage.invalidate()`.
 - If the lib lacks something, extend the lib (and its docs) rather than hacking it into one piece; after
   lib changes run `node test.mjs` (unit + registry coverage, ~1 s) and `node check.mjs` (renders every scene, read `out/check/_sheet.png`).
