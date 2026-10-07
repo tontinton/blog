@@ -340,14 +340,14 @@ const blinking = (t, period, offset) => {
 };
 
 // closing an eye paints its voxels skin, except the ones that become the closed-lid line
-const LIDS = { hu: ['huEyeTop', 'huEyeHi'], wf: ['wfEyeTop', 'wfEyeHi', 'wfEyeMid'] };
-const CLOSED = {};
+const LIDS = { hu: ['huEyeTop', 'huEyeHi'], wf: ['wfEyeTop', 'wfEyeHi', 'wfEyeMid', 'wfEye'] };
+const CLOSED = { wfEye: '#3a2620' };   // her blue iris row becomes a dark lash line, not a blue one
 
 export function build(g, P, { stage } = {}) {
   const parts = [...buildHusband(g, P), ...buildWife(g, P)];
   const skin = { hu: P.def('huSkin').color, wf: P.def('wfSkin').color };
   const orig = {};
-  for (const n of ['huEyeTop', 'huEyeHi', 'wfEyeTop', 'wfEyeHi', 'wfEyeMid']) orig[n] = P.def(n).color;
+  for (const n of [...LIDS.hu, ...LIDS.wf]) orig[n] = P.def(n).color;
   const shut = { hu: false, wf: false };
   const setEyes = (who, closed) => {
     if (shut[who] === closed) return;
