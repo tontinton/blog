@@ -30,6 +30,7 @@ export const PARTICLE_PRESETS = {
   leaves: { count: 120, motion: 'fall', shape: 'cube', lit: true, colors: ['#e0a040', '#c8642a', '#9ab040'], size: 0.45, flat: 0.15, spin: 1.5, speed: 0.35, sway: 2, opacity: 1 },
   cubes: { count: 40, motion: 'float', shape: 'cube', lit: true, colors: ['#ffe6c4', '#ffd0d8', '#fff3d6'], size: 0.6, sizeJitter: 0.4, spin: 0.3, speed: 0.4, turbulence: 0.6, opacity: 1, glow: 0.35 },
   mist: { count: 70, motion: 'plume', shape: 'soft', colors: ['#ffffff', '#e8f4ff'], size: 1.6, sizeJitter: 0.5, glow: 1.1, speed: 0.08, sway: 1.5, turbulence: 0.8, opacity: 0.35, fade: 0.5 },
+  haze: { count: 40, motion: 'drift', shape: 'soft', colors: ['#ffffff', '#f6efe4'], size: 11, sizeJitter: 0.4, glow: 1, speed: 0.02, sway: 0.4, turbulence: 0.2, opacity: 0.2, fade: 0.6 }, // low drifting morning haze (lakes, valleys)
   smoke: { count: 60, motion: 'plume', shape: 'soft', colors: ['#d9d9d9', '#bfbfbf'], size: 2.2, sizeJitter: 0.4, glow: 0.9, speed: 0.15, sway: 1, turbulence: 0.5, opacity: 0.55, fade: 0.5 },
 };
 
@@ -125,7 +126,9 @@ export class Particles {
         void main() {
           float am; vec3 wp = particlePos(am);
           vec4 mv = viewMatrix * vec4(wp, 1.0);
-          gl_Position = projectionMatrix * mv;
+          vec4 mvb = mv;
+          if (SOFT == 1) mvb.z += uSize * aSize;   // soft sprites: pull toward the camera by their size so the water plane / ground don't slice them into hard-edged bands
+          gl_Position = projectionMatrix * mvb;
           float px = uSize * aSize * uPx * (isOrtho() ? 1.0 : 1.0 / -mv.z);
           ${o.motion === 'plume' ? 'px *= 0.5 + 1.2 * life;' : ''}
           gl_PointSize = max(px, 1.0);

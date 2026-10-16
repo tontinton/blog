@@ -1,6 +1,7 @@
 // Minimal page chrome shared by all pieces: loader, title card, back link, interaction hint, and the
 // ?debug panel (lil-gui) for live look tweaking. Everything is optional via `ui` options:
 //   ui: { title, subtitle, credit, back: '/' | url | false, backLabel: '← tontinton', hint: true | 'custom text' | false,
+//         (the default hint follows the input: touch or mouse, and how to move when camera.pan is on)
 //         loader: true | false, theme: 'auto' | 'light' | 'dark', css: 'extra css' }
 // In ?shot mode nothing is shown.
 import { luminance, rgb } from './color.js';
@@ -28,7 +29,11 @@ const CSS = `
 .vx-cube { width: 18px; height: 18px; background: var(--vx-fg); opacity: .8; animation: vx-spin 1.6s cubic-bezier(.6,0,.4,1) infinite; }
 @keyframes vx-spin { 0% { transform: rotate(0) scale(.8); } 50% { transform: rotate(90deg) scale(1); } 100% { transform: rotate(180deg) scale(.8); } }
 @media (prefers-reduced-motion: reduce) { .vx-cube { animation: none; } }
-@media (max-width: 520px) { .vx-hint { display: none; } }
+@media (max-width: 520px) { .vx-hint { display: none; }
+  .vx-hint.vx-move { display: block; left: 50%; right: auto; bottom: auto; top: max(54px, calc(env(safe-area-inset-top) + 44px)); transform: translateX(-50%);
+    white-space: nowrap; padding: 5px 12px; border-radius: 999px; opacity: .75; background: color-mix(in srgb, var(--vx-bg-solid, #fff) 60%, transparent);
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+  .vx-hint.vx-move.gone { opacity: 0; } }
 .lil-gui { --width: 280px; }
 .lil-gui.root { pointer-events: auto; }
 `;
@@ -48,6 +53,7 @@ export function createUI(stage, o = {}) {
     const dark = o.theme === 'dark' || (o.theme !== 'light' && luminance(c) < 0.35);
     const set = (el) => {
       el.style.setProperty('--vx-fg', dark ? '#f4efe6' : '#1d1a16');
+      el.style.setProperty('--vx-bg-solid', dark ? '#1d1a16' : '#f6f1e8');
       const cols = (bg.color ? [bg.color] : bg.colors).map((x) => `rgb(${rgb(x).map((v) => Math.round(v * 255)).join(',')})`);
       el.style.setProperty('--vx-bg', cols.length > 1 ? (bg.type === 'radial' ? `radial-gradient(circle at 50% 50%, ${cols.join(',')})` : `linear-gradient(${180 + (bg.angle ?? 0)}deg, ${cols.join(',')})`) : cols[0]);
     };
@@ -83,8 +89,11 @@ export function createUI(stage, o = {}) {
   let hint = null;
   if (o.hint !== false) {
     hint = document.createElement('div');
-    hint.className = 'vx-hint';
-    hint.textContent = typeof o.hint === 'string' ? o.hint : 'drag to rotate · scroll to zoom';
+    const coarse = window.matchMedia?.('(pointer: coarse)').matches, pan = !!stage.camOpts?.pan;
+    hint.className = 'vx-hint' + (pan ? ' vx-move' : '');
+    hint.textContent = typeof o.hint === 'string' ? o.hint
+      : coarse ? (pan ? 'drag to rotate · two fingers to move · pinch to zoom' : 'drag to rotate · pinch to zoom')
+      : pan ? 'drag to rotate · right-drag or WASD to move · scroll to zoom' : 'drag to rotate · scroll to zoom';
     root.appendChild(hint);
   }
   theme();
@@ -113,7 +122,7 @@ export function createUI(stage, o = {}) {
       if (loader) setTimeout(() => loader.classList.add('done'), 60);
       if (hint) setTimeout(() => hint.classList.add('gone'), 7000);
     },
-    interacted() { hint?.classList.add('gone'); },
+    interacted() { if (hint && !hint.classList.contains('gone')) setTimeout(() => hint.classList.add('gone'), 1500); }, // a moment to read the rest
     lookChanged() { theme(); },
     frame(dt, drew = true) {
       if (!statsEl) return;

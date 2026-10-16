@@ -29,7 +29,8 @@ static/voxel/<slug>/
 // scene.js
 import { Stage } from '../lib/index.js';
 import { REGIONS } from './layout.js';
-const stage = new Stage({ look: ['golden', { sun: { update: 'static' } }], camera: { maxZoom: 12 } });
+// pan: big worlds need moving around, not just orbiting (right-drag / two fingers / WASD / double-tap, nav.js)
+const stage = new Stage({ look: ['golden', { sun: { update: 'static' } }], camera: { maxZoom: 12, pan: true } });
 await stage.world({
   palette: './palette.js', assets: './assets.js',
   regions: REGIONS.map((r) => ({ name: r.name, module: `./regions/${r.file}.js`, box: r.box, options: r.options })),
@@ -56,6 +57,7 @@ export default function build(g, ctx) {
   ctx.emit('actors', { ...LIFE.walker, count: 10, area: [[x0 + 2, z0 + 2], [x1 - 2, z1 - 2]] });   // shared spec → merges
   ctx.emit('actors', { creature: 'canoe', behavior: 'path', path: [[x0 + 2.5, z0], [x0 + 2.5, z1]] });   // custom creature
   ctx.emit('prop', { asset: 'windmillBlades', position: [x0 + 50, 20, z0 + 40], pivot: [0, 0, 0], animate: { spin: [0, 0, 0.8] } });
+  ctx.emit('poi', { label: 'The market', icon: '🧺', target: [x0 + 20, 4, z0 + 20], zoom: 6, yaw: 30 });   // → stage.tour(pois)
 }
 ```
 
@@ -72,9 +74,15 @@ overshoot their nominal size (rocks ~0.5, house roofs by `overhang`, trees by th
 a few voxels inside. **Instanced assets and props are not clipped** — a tree instanced at the edge
 overhangs the neighbour; keep it ~its radius inside.
 
-Emitted actors that differ only in `area` / `path` / `center` / `radius` / `count` / `seed` (key order
+Emitted actors that differ only in `area` / `path` / `center` / `radius` / `spots` / `count` / `seed` (key order
 doesn't matter) are **merged into one actor system** — one draw call per variant (+1 in the shadow pass)
-for the whole world. Any other difference (an extra `options: { coat }`, a different `variants`) makes a
+for the whole world (each emit stays its own group: hoppers keep to their own region's spots). Live objects
+can't cross the worker boundary, so families are linked by plain-data ids:
+```js
+ctx.emit('actors', { id: 'river-sow', creature: 'boar', area });     // prefix ids with the region name: unique world-wide
+ctx.emit('actors', { creature: 'boar', options: { baby: true }, count: 4, behavior: 'follow', target: 'river-sow' });
+```
+Emits with an `id` or a string `target` are never merged; followers are created after their leaders. Any other difference (an extra `options: { coat }`, a different `variants`) makes a
 separate system, so put the shared specs in `layout.js` (`export const LIFE = { walker: { creature:
 'walker', variants: 3 }, … }`) and have every region spread them. Actors are created before the grid is
 freed, so they can read the terrain.
@@ -131,8 +139,13 @@ cost the quads.
 - **Water is one pass**: refracting water reuses the opaque image instead of rendering the scene twice.
 - **Incremental frames**: when the camera rests, only what changed is redrawn (see api.md, "Render cache");
   a world with a few walkers and no wind redraws a few percent of its pixels per frame.
-- **Adaptive resolution**: the stage drops the pixel ratio in 0.25 steps when frames take > 26 ms
-  (`adaptive: false` to disable); touch devices cap DPR at 1.5.
+- **Adaptive resolution**: when frames take longer than their pacing allows (> 26 ms while the camera moves),
+  the stage first drops 4× MSAA to 2×, then the pixel ratio in 0.25 steps (`adaptive: false` to disable);
+  touch devices cap DPR at 1.5.
+- **Per-frame CPU** stays flat with hundreds of agents: actor systems outside the view keep walking but
+  aren't posed; the swaying / rippling voxels' screen rects are projected once per camera pose; the moving
+  shadow casters restore their own patches of the shadow map; every palette's IBL table is a band of one
+  atlas (one pass while the camera turns, not a render-target switch per creature palette).
 - **Memory**: once on the GPU, voxel meshes drop their JS-side vertex/index arrays (~100 bytes a quad) —
   picking walks the grid instead. `keepGrid: false` frees the grid instead (the meshes then keep their
   arrays for picking; `rebuild` doesn't work).

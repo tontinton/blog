@@ -341,7 +341,8 @@ const TONE = { none: 0, aces: 1, agx: 2, neutral: 3, reinhard: 4, cineon: 5 };
 export class Post {
   constructor(renderer, opts = {}) {
     this.renderer = renderer;
-    this.samples = opts.samples ?? 4;
+    // ≥ 1: a single-sampled scene target (samples 0) draws nothing here; 1 = multisampled storage, no AA
+    this.samples = Math.max(1, opts.samples ?? 4);
     this.quad = new THREE.FullScreenQuad(null);
     this.w = this.h = 1;
     this.levels = 6;
@@ -412,6 +413,14 @@ export class Post {
     return new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, samples: this.samples, depthTexture, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
   }
 
+  /** Change the MSAA sample count of the scene + particle targets (their contents are lost: redraw everything). */
+  setSamples(n) {
+    n = Math.max(1, n);
+    if (n === this.samples) return;
+    this.samples = n;
+    for (const t of [this.scene, this.particleTarget]) if (t) { t.samples = n; t.dispose(); } // three re-creates them on next use
+  }
+
   setSize(w, h) {
     w = Math.max(1, Math.round(w)); h = Math.max(1, Math.round(h));
     if (w === this.w && h === this.h) return;
@@ -457,14 +466,27 @@ export class Post {
     const info = { calls: 0, triangles: 0 };
     const pass = () => { r.setRenderTarget(rt); r.render(scene, camera); info.calls += r.info.render.calls; info.triangles += r.info.render.triangles; };
     const draw = (q) => (split ? this.splitDraw(split, () => pass(), rt, q) : pass());
+    const sub = (q, fn) => this._scissored(rt, q, () => {
+      camera.setViewOffset(this.w, this.h, q.x, this.h - q.y - q.h, q.w, q.h);
+      try { fn(); } finally { camera.clearViewOffset(); }
+    }, true);
     if (!rects) {
       draw(null);
       this.sceneInfo = info; // main scene pass only (shadows, reflection and post excluded)
+    } else if (split && rects.length > 1) {
+      // refracting water in several rects: every rect's opaque pass, then ONE refraction update (one mip chain,
+      // not one per rect), then every rect's transparent pass
+      try {
+        split.opaque();
+        for (const q of rects) sub(q, pass);
+        this._refraction(rt, rects, 'main');
+        split.transparent();
+        const ac = r.autoClear;
+        r.autoClear = false;
+        try { for (const q of rects) { this._refrRect(q, rt.width, rt.height); sub(q, pass); } } finally { r.autoClear = ac; }
+      } finally { split.restore(); }
     } else {
-      for (const q of rects) this._scissored(rt, q, () => {
-        camera.setViewOffset(this.w, this.h, q.x, this.h - q.y - q.h, q.w, q.h);
-        try { draw(q); } finally { camera.clearViewOffset(); }
-      }, true);
+      for (const q of rects) sub(q, () => draw(q));
     }
     r.setClearColor(prevClear, prevAlpha);
   }
@@ -487,19 +509,29 @@ export class Post {
     } finally { split.restore(); }
   }
 
-  // target's (resolved) opaque image → mipmapped refraction source for the voxel water/glass material
+  // target's (resolved) opaque image → mipmapped refraction source for the voxel water/glass material.
+  // q: the rect redrawn (null = all), or a list of rects (copied one by one, the mip chain built once)
   _refraction(src, q, key) {
     const W = src.width, H = src.height;
     this.refrTargets ??= {};
     let t = this.refrTargets[key];
-    if (!t) t = this.refrTargets[key] = new THREE.WebGLRenderTarget(W, H, { type: THREE.HalfFloatType, depthBuffer: false, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter });
+    if (!t) {
+      t = this.refrTargets[key] = new THREE.WebGLRenderTarget(W, H, { type: THREE.HalfFloatType, depthBuffer: false, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter });
+      this.renderer.initRenderTarget(t); // set up with its mip chain before generateMipmaps is toggled below
+    }
     if (t.width !== W || t.height !== H) t.setSize(W, H);
     this.mRefr.uniforms.tSrc.value = src.texture;
-    this._scissored(t, q, () => this._pass(this.mRefr, t)); // three regenerates the mip chain after the pass
+    const list = Array.isArray(q) ? q : [q];
+    // three regenerates the mip chain after a pass into the target: only after the last one
+    list.forEach((r, i) => { t.texture.generateMipmaps = i === list.length - 1; this._scissored(t, r, () => this._pass(this.mRefr, t)); });
+    t.texture.generateMipmaps = true;
     this.refr.map.value = t.texture;
     this.refr.size.value.set(W, H);
-    this.refr.rect.value.set(q ? q.x / W : 0, q ? q.y / H : 0, q ? q.w / W : 1, q ? q.h / H : 1);
+    this._refrRect(Array.isArray(q) ? null : q, W, H);
   }
+
+  // the screen rect the refracting pass draws (its sub-frustum's NDC → the refraction source's uv)
+  _refrRect(q, W, H) { this.refr.rect.value.set(q ? q.x / W : 0, q ? q.y / H : 0, q ? q.w / W : 1, q ? q.h / H : 1); }
 
   /** Copy the scene target's (resolved) color into light layer i (rects: only those pixels). */
   copyLayer(i, rects = null) {

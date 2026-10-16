@@ -64,6 +64,17 @@ A typical shot takes 4–10 s; 750k voxels ~15 s.
 Shot mode (`?shot`) hides all UI, disables damping/auto-rotate, freezes time at `t=0` (or `--t`), and the
 canvas is captured directly, so images are deterministic.
 
+## Tours and inspection (big pieces)
+```sh
+node tour.mjs /voxel/khao_sok/ --size 1100x700 --wait 8000 --out out/tour   # clicks through stage.tour()'s stops (› button), one PNG per
+                                 # stop + labels; --from 20 --only 26 for a range. dpr is pinned (no adaptive-resolution blur)
+node frames.mjs /voxel/khao_sok/ '[{"target":[90,3,110],"zoom":5,"yaw":8,"pitch":16}]'   # try POI framings exactly as the tour flies
+                                 # them (shot.mjs --yaw re-fits the frame, so its zoom differs from the tour's at other yaws)
+node inspect.mjs /voxel/khao_sok/                                # actor systems by creature (systems / agents / variant meshes), particle systems
+```
+Actor variants are draw calls: merge systems by spreading shared specs (`LIFE` in a piece's layout.js) that differ only in
+area/path/spots/center/radius/count/seed.
+
 ## Unit tests (no browser, ~1 s)
 ```sh
 node test.mjs                     # grid/shapes/palette layout/mesher invariants (winding, AO, merge, bakes)/vox,
@@ -90,7 +101,7 @@ node serve.mjs            # http://127.0.0.1:8737/voxel/<slug>/?debug
 `?debug` shows fps/voxel/quad stats and a lil-gui panel for every look field; "copy look JSON" puts the
 diff vs the default look on the clipboard (and console) — paste it into the piece's `look` overrides.
 "save PNG (2x)" downloads a high-res still. Other params: `?look=neon`, `?lookjson={...}`, `?yaw=`,
-`?pitch=`, `?zoom=`, `?t=`, `?dpr=`.
+`?pitch=`, `?zoom=`, `?t=`, `?dpr=`, `?msaa=1|2|4` (MSAA samples).
 
 Zola also serves `static/` as-is (`zola serve` → `/voxel/<slug>/`), but lab scenes only exist on serve.mjs.
 

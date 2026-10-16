@@ -2,8 +2,8 @@
 // now still geometry is rendered into a cached depth map only when it changes (models added/moved for
 // the first time, look/sun/layout changes), and each frame the cache is blitted into the live map and only
 // the moving casters (actors, animated models, swaying leaves) are drawn on top — and only inside their
-// texel rectangle (plus last update's, to erase where they were), so a walking cat restores a few
-// thousand texels instead of the whole 4096² map. Face-direction culling
+// texel rectangles (one per caster, plus last update's, to erase where they were), so a walking cat restores
+// a few thousand texels instead of the whole 4096² map. Face-direction culling
 // draws only faces pointing away from the sun (what three renders into shadow maps).
 //
 // sun.update (look): 'always' (default) — moving casters every frame; N — every N frames;
@@ -14,6 +14,7 @@
 // runs update() in place of three's own shadow pass.
 import * as THREE from './three.js';
 import { faceMask, setFaceGroups, useFaceGroups, bucketQuads } from './cull.js';
+import { mergeRects } from './cache.js';
 
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _box = new THREE.Box3(), _tmp = new THREE.Box3(), _v4 = new THREE.Vector4();
 
@@ -90,12 +91,15 @@ export class SunShadows {
           try { this._draw([sun], still); } finally { sun.shadow.map = live; }
         }
         if (due || fresh) {
-          // only the texels the movers cover now or covered last time need restoring + redrawing
+          // only the texels the movers cover now or covered last time need restoring + redrawing — per mover
+          // (a few leaves in one corner and a drifting cube in another restore two small patches, not the 4096²
+          // rectangle spanning both)
           const now = this._region(moving);
-          const rect = fresh || !now || !this.prev ? null : unionRect(now, this.prev);
+          const rects = fresh || !now || !this.prev ? [null] : mergeRects([...now, ...this.prev].map(([x0, y0, x1, y1]) => ({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 })), 1e9, 1e9, 4)
+            .map((q) => [q.x, q.y, q.x + q.w, q.y + q.h]).filter((q) => q[2] > q[0] && q[3] > q[1]);
           this.prev = now;
           groups(moving);
-          this._draw([sun], moving, this.cache, rect);
+          for (const rect of rects) this._draw([sun], moving, this.cache, rect);
           changed = true;
         }
       }
@@ -117,13 +121,26 @@ export class SunShadows {
     return changed;
   }
 
-  // texel rect [x0, y0, x1, y1] of the sun shadow map covering the moving casters, or null (unknown bounds)
+  // texel rects [[x0, y0, x1, y1], …] of the sun shadow map covering the moving casters (one per caster), or
+  // null (unknown bounds)
   _region(moving) {
     const s = this.stage, sh = s.sun.shadow, cam = sh.camera, size = sh.mapSize;
     sh.updateMatrices(s.sun);
-    _box.makeEmpty();
+    const out = [];
+    const texels = (box) => {
+      if (box.isEmpty()) return;
+      let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+      for (let i = 0; i < 8; i++) {
+        _a.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).project(cam);
+        const x = (_a.x * 0.5 + 0.5) * size.x, y = (_a.y * 0.5 + 0.5) * size.y;
+        x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
+      }
+      const r = [Math.max(0, Math.floor(x0) - 2), Math.max(0, Math.floor(y0) - 2), Math.min(size.x, Math.ceil(x1) + 2), Math.min(size.y, Math.ceil(y1) + 2)];
+      if (r[2] > r[0] && r[3] > r[1]) out.push(r);
+    };
     for (let i = 0; i < moving.length; i += 2) {
       const o = moving[i], part = moving[i + 1];
+      _box.makeEmpty();
       if (part === 'sway' && !o.isInstancedMesh) {
         const b = o.geometry.userData.boxes?.sway;
         if (!b) return null;
@@ -131,28 +148,22 @@ export class SunShadows {
           _tmp.min.set(b[k], b[k + 1], b[k + 2]); _tmp.max.set(b[k + 3], b[k + 4], b[k + 5]);
           _box.union(_tmp.expandByScalar(0.5).applyMatrix4(o.matrixWorld));
         }
+        texels(_box);
         continue;
       }
       const ps = s.particleSystems.find((p) => p.object === o);
       if (ps) {
         const u = ps.uniforms, pad = (u.uSize.value ?? 0.5) * 2 + 1;
-        _tmp.min.copy(u.uBoxMin.value); _tmp.max.copy(u.uBoxMin.value).add(u.uBoxSize.value);
-        _box.union(_tmp.expandByScalar(pad));
+        _box.min.copy(u.uBoxMin.value); _box.max.copy(u.uBoxMin.value).add(u.uBoxSize.value);
+        texels(_box.expandByScalar(pad));
         continue;
       }
       if (o.isInstancedMesh) o.computeBoundingBox();
       const bb = o.isInstancedMesh ? o.boundingBox : (o.geometry.boundingBox ?? (o.geometry.computeBoundingBox(), o.geometry.boundingBox));
       if (!bb || bb.isEmpty() || !o.isMesh) return null;
-      _box.union(_tmp.copy(bb).applyMatrix4(o.matrixWorld).expandByScalar(1)); // legs, tails, vertex hooks
+      texels(_box.copy(bb).applyMatrix4(o.matrixWorld).expandByScalar(1)); // legs, tails, vertex hooks
     }
-    if (_box.isEmpty()) return [0, 0, 0, 0];
-    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-    for (let i = 0; i < 8; i++) {
-      _a.set(i & 1 ? _box.max.x : _box.min.x, i & 2 ? _box.max.y : _box.min.y, i & 4 ? _box.max.z : _box.min.z).project(cam);
-      const x = (_a.x * 0.5 + 0.5) * size.x, y = (_a.y * 0.5 + 0.5) * size.y;
-      x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
-    }
-    return [Math.max(0, Math.floor(x0) - 2), Math.max(0, Math.floor(y0) - 2), Math.min(size.x, Math.ceil(x1) + 2), Math.min(size.y, Math.ceil(y1) + 2)];
+    return out;
   }
 
   // render `lights`' shadow maps with only the casters in `list` (pairs [object, part]); `base`: a depth
@@ -201,4 +212,3 @@ function blitDepth(r, src, dst, rect = null) {
   st.bindFramebuffer(gl.READ_FRAMEBUFFER, null);
 }
 
-const unionRect = (a, b) => [Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3])];

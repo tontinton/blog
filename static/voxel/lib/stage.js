@@ -7,7 +7,7 @@
 //   stage.start();
 //
 // URL params (handy while iterating): ?look=neon ?yaw=30 ?pitch=20 ?zoom=1.3 ?t=4 (freeze time)
-//   ?debug (live tweak panel + stats) ?shot (no UI, deterministic; used by voxel/tools/shot.mjs) ?dpr=1
+//   ?debug (live tweak panel + stats) ?shot (no UI, deterministic; used by voxel/tools/shot.mjs) ?dpr=1 ?msaa=2
 //   ?nocache (redraw everything every frame) ?bench (log frame costs, see bench())
 //
 // Rendering is incremental (cache.js): frames where nothing changed cost nothing, small changes redraw
@@ -28,6 +28,8 @@ import { RenderCache, PARTICLE_LAYER, GRAD_STEP } from './cache.js';
 import { faceMask, setFaceGroups } from './cull.js';
 import { IblTable } from './ibl.js';
 import { resolveLook, merge } from './looks.js';
+import { flyTo, createTour } from './tour.js';
+import { setupNav } from './nav.js';
 import { rgb, srgbToLinear } from './color.js';
 import { Particles } from './particles.js';
 import { Actors } from './actors.js';
@@ -81,7 +83,7 @@ export class Stage {
     this.time = 0;
     this.fixedTime = params.has('t') ? Number(params.get('t')) : this.shot ? opts.shotTime ?? 0 : null;
     // 2 MSAA samples are plenty on hi-dpi screens (the pixels are already tiny), 4 on 1x screens
-    this.post = new Post(this.renderer, { samples: opts.msaa ?? (this.maxDpr >= 2 ? 2 : 4) });
+    this.post = new Post(this.renderer, { samples: params.has('msaa') ? Number(params.get('msaa')) : opts.msaa ?? (this.maxDpr >= 2 ? 2 : 4) });
     // frame pacing: never faster than fps.max (a 120 Hz screen would otherwise render twice as often), and
     // fps.idle once nobody has touched the camera for fps.idleAfter seconds — ambient animation (flicker,
     // tails, particles) looks the same at 30 fps and the laptop stays cool. ?fps=N forces a rate.
@@ -106,12 +108,13 @@ export class Stage {
     this.camera = cam.type === 'persp' ? new THREE.PerspectiveCamera(cam.fov, 1, 0.1, 5000) : new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 5000);
     this.controls = new THREE.OrbitControls(this.camera, this.renderer.domElement);
     Object.assign(this.controls, {
-      enableDamping: !this.shot, dampingFactor: cam.damping, enablePan: cam.pan, enabled: cam.controls && !this.shot,
+      enableDamping: !this.shot, dampingFactor: cam.damping, enablePan: !!cam.pan, enabled: cam.controls && !this.shot,
       minPolarAngle: (90 - cam.maxPitch) * DEG, maxPolarAngle: (90 - cam.minPitch) * DEG, rotateSpeed: 0.6, zoomSpeed: 0.9,
     });
     this.controls.addEventListener('start', () => { this._interacted = performance.now(); this.ui?.interacted(); this.wake(); });
     this.controls.addEventListener('change', () => { this._active = performance.now(); });
     this.controls.addEventListener('change', () => { this._dirty = true; this.wake(); });
+    this.nav = cam.pan ? setupNav(this, cam.pan) : null; // move around, not just orbit (nav.js)
 
     // lights
     this.sun = new THREE.DirectionalLight(0xffffff, 2);
@@ -237,17 +240,21 @@ export class Stage {
       }
     }
     // extras: particles, lights, actors, props, custom. Actors that differ only in area/path/center/radius/
-    // count/seed (e.g. walkers emitted by every district) merge into one system: one draw call per variant.
+    // spots/count/seed (e.g. walkers emitted by every district) merge into one system: one draw call per variant.
+    // Each emit stays its own group (hoppers only fly between their own region's spots). Named systems (`id`) and
+    // followers of one (`target: 'id'`, plain data across the worker boundary) are never merged.
     const merged = new Map();
+    const byId = (e) => e.kind === 'actors' && typeof e.data.target === 'string';
     for (const e of extras) {
-      if (e.kind !== 'actors' || !(e.data.area || e.data.path || e.data.center)) continue;
-      const { area, path, center, radius, count, seed, ...rest } = e.data;
+      if (e.kind !== 'actors' || e.data.id != null || byId(e) || !(e.data.area || e.data.path || e.data.center || e.data.spots)) continue;
+      const { area, path, center, radius, spots, count, seed, ...rest } = e.data;
       const key = stableKey(rest); // key order doesn't matter
       if (!merged.has(key)) { merged.set(key, { ...rest, seed, groups: [] }); e.merged = merged.get(key); }
       else e.skip = true;
-      merged.get(key).groups.push({ area, path, center, radius, count: count ?? 1 });
+      merged.get(key).groups.push({ area, path, center, radius, spots, count: count ?? (spots ? undefined : 1) }); // spots: Actors picks the default
     }
-    for (const e of extras) {
+    const pois = [];   // ctx.emit('poi', { label, icon, target, zoom, yaw }) → stage.tour(pois)
+    for (const e of [...extras.filter((x) => !byId(x)), ...extras.filter(byId)]) { // followers last: their leaders exist when they spawn
       if (e.skip) continue;
       const d = e.data;
       if (e.kind === 'particles') this.particles(d);
@@ -256,12 +263,13 @@ export class Stage {
       else if (e.kind === 'prop') {
         const g = this.add(assetGrids[d.asset], { palette: P, name: d.asset, bake: spec.assetBake ?? { ao: true }, cluster: 0, position: d.position, rotation: d.rotation, pivot: d.pivot, fit: false });
         if (d.animate) this.animate(g, d.animate);
-      } else spec.onExtra?.(e);
+      } else if (e.kind === 'poi') { pois.push({ ...d, group: d.group ?? e.region }); spec.onExtra?.(e); }
+      else spec.onExtra?.(e);
     }
     if (free) { const m = group.userData.model; this._fitGroundFor(m); m.grid = null; }
     const stats = { regions: regions.length, generateMs: Math.round(tGen), totalMs: Math.round(performance.now() - t0), workers: pool?.size ?? 0, perRegionMs: timing, ...group.userData.model.stats };
     console.log('voxel world', JSON.stringify(stats));
-    return { group, grid: group.userData.model.grid, palette: P, assets, extras, stats };
+    return { group, grid: group.userData.model.grid, palette: P, assets, extras, pois, stats };
   }
 
   _newModel(grid, opts) {
@@ -539,7 +547,14 @@ export class Stage {
   _stepActors(t, dt) {
     const sys = this.actorSystems;
     if (!sys.length) return;
-    if (this.fixedTime == null) { for (const a of sys) { a.step(dt, t); a.pose(t); } return; }
+    if (this.fixedTime == null) {
+      // a system wholly outside the view keeps walking but isn't posed (no matrices, no uploads) until it's back
+      const G = this.look.ground, cam = this.camera;
+      cam.updateMatrixWorld(); // this frame's view (the controls just moved it)
+      const fr = G.reflect > 0 && G.type !== 'none' ? null : _frustum.setFromProjectionMatrix(_pm.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
+      for (const a of sys) { a.step(dt, t); if (!fr || a.inView(fr)) a.pose(t); }
+      return;
+    }
     // frozen clock (?t=, shots): replay from spawn in lockstep at 30 Hz, once — deterministic, and followers see their leaders move
     const todo = sys.filter((a) => a._simT !== this.fixedTime);
     if (!todo.length) return;
@@ -553,6 +568,12 @@ export class Stage {
 
   /** fn(t, dt) every frame (t = seconds since start, frozen with ?t=). */
   onUpdate(fn) { this.updaters.push(fn); this.wake(); return this; }
+
+  /** Glide the camera to a point: { zoom, yaw, pitch (deg, omitted = keep), dur }. See tour.js. */
+  flyTo(target, o) { return flyTo(this, target, o); }
+
+  /** Points-of-interest tour UI ("‹ ✦ Explore ›"): pois [{ label, icon, target, zoom, yaw, pitch, group }], o: { order, groups, home, yaw, pitch }. See tour.js. */
+  tour(pois, o) { return createTour(this, pois, o); }
 
   /** Redraw everything next frame (after changing something the render cache can't see, e.g. a uniform). */
   invalidate() { this._sceneDirty = true; this.wake(); }
@@ -905,8 +926,10 @@ export class Stage {
       this.controls.autoRotate = true;
       this.controls.autoRotateSpeed = (c.autoRotate || c.idleRotate) / 6; // deg/s → OrbitControls units
     } else this.controls.autoRotate = false;
+    this.nav?.before(dt);
     this._settleDamping();
     this.controls.update(dt);
+    this.nav?.after();
     if (this.look.sun.follow) this._fitShadow();
     this.uniforms.uTime.value = t;
     for (const m of this.models) m.uniforms.uMat.value = m.palette.texture();
@@ -919,16 +942,20 @@ export class Stage {
     return drew;
   }
 
-  // Drop the render resolution in 0.25 steps (never below 1, or 0.75 on 1x screens) when frames are slow.
+  // When frames are slow: 4× → 2× MSAA first, then the render resolution in 0.25 steps (never below 1, or
+  // 0.75 on 1x screens). Each frame is judged against the pacing it had (idle frames at fps.idle are 33 ms on
+  // purpose): a window mixing idle and active frames must not read as slow.
   _adapt(dt) {
     if (this.shot || this.opts.adaptive === false || params.has('dpr')) return;
-    this._ft = (this._ft ?? []); this._ft.push(dt);
+    const allowed = Math.max(1 / 38, 1.25 / Math.max(1, this._target || 60)); // frames slower than the pacing allows
+    this._ft = (this._ft ?? []); this._ft.push(dt / allowed);
     if (this._ft.length < 90) return;
-    const avg = this._ft.reduce((a, b) => a + b, 0) / this._ft.length;
+    const slow = this._ft.reduce((a, b) => a + b, 0) / this._ft.length > 1;
     this._ft = [];
+    if (!slow) return;
     const floor = this.maxDpr > 1 ? 1 : 0.75;
-    const slow = Math.max(1 / 38, 1.25 / Math.max(1, this._target || 60)); // frames slower than the pacing allows
-    if (avg > slow && this.dpr > floor) { this.dpr = Math.max(floor, this.dpr - 0.25); this.resize(); }
+    if (this.post.samples > 2 && this.opts.msaa == null && !params.has('msaa')) { this.post.setSamples(2); this.invalidate(); }
+    else if (this.dpr > floor) { this.dpr = Math.max(floor, this.dpr - 0.25); this.resize(); }
   }
 
   // models whose transform changed since the last frame are "moving" from then on (out of the static shadow cache)
@@ -1267,7 +1294,7 @@ function instanceMatrix(it) {
   return new THREE.Matrix4().compose(new THREE.Vector3(...(o.position ?? [0, 0, 0])), new THREE.Quaternion().setFromEuler(rot), sc);
 }
 
-const _view = new THREE.Vector3();
+const _view = new THREE.Vector3(), _frustum = new THREE.Frustum(), _pm = new THREE.Matrix4();
 
 // first filled voxel along o + t·d (grid coords; t in the caller's units) → { voxel, normal, t } | null
 function voxelRay(grid, o, d) {

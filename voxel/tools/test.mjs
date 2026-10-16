@@ -253,7 +253,9 @@ test('ascii flip mirrors ragged rows against the widest row', () => {
 // ---- generators: every one runs, writes voxels, and is deterministic per seed -----------------------
 // ---- registry: every registered generator/creature is tested from its own example -----------------------
 // (register new ones with defineGenerator / defineCreature + example and they're covered automatically)
-const GEN_MODULES = { nature: await import('../../static/voxel/lib/gen/nature.js'), terrain: await import('../../static/voxel/lib/gen/terrain.js'), build: await import('../../static/voxel/lib/gen/build.js') };
+const GEN_MODULES = { nature: await import('../../static/voxel/lib/gen/nature.js'), terrain: await import('../../static/voxel/lib/gen/terrain.js'), build: await import('../../static/voxel/lib/gen/build.js'),
+  jungle: await import('../../static/voxel/lib/gen/jungle.js'), understory: await import('../../static/voxel/lib/gen/understory.js'),
+  karst: await import('../../static/voxel/lib/gen/karst.js'), thai: await import('../../static/voxel/lib/gen/thai.js') };
 test('every exported generator is registered with an example', () => {
   const missing = [];
   for (const [cat, mod] of Object.entries(GEN_MODULES)) for (const [name, fn] of Object.entries(mod)) {
@@ -265,7 +267,7 @@ test('every exported generator is registered with an example', () => {
 });
 for (const e of V.list('generator')) test(`generator ${e.name} (example)`, () => {
   assert.ok(e.example, 'no example');
-  const make = () => { const Q = new Palette({ ...NATURE, ...BUILD }); const g = new VoxelGrid(Q); e.example(g); return g; };
+  const make = () => { const Q = new Palette({ ...NATURE, ...BUILD, ...V.JUNGLE, ...V.UNDERSTORY, ...V.KARST, ...V.THAI, water: { color: '#4ab4c8', kind: 'water', opacity: 0.4 } }); const g = new VoxelGrid(Q); e.example(g); return g; };
   const a = make(), b = make();
   assert.ok(a.count() > 0, 'wrote no voxels');
   assert.deepEqual(cells(a), cells(b), 'not deterministic');
@@ -353,6 +355,29 @@ test('actors: follow chain trails its target', () => {
   for (let k = 0; k < 600; k++) { lead.x = Math.sin(k / 200) * 6; lead.z = k / 40; F.step(1 / 30, k / 30); } // leader ~0.8 voxels/s
   const d0 = Math.hypot(F.agents[0].x - lead.x, F.agents[0].z - lead.z), d2 = Math.hypot(F.agents[2].x - lead.x, F.agents[2].z - lead.z);
   assert.ok(d0 < 6 && d2 > d0, `chain order (d0 ${d0.toFixed(1)}, d2 ${d2.toFixed(1)})`);
+});
+
+test('actors: inView (frustum) — far away systems are skipped, shadow casters never', () => {
+  const g = new VoxelGrid(new Palette(NATURE)); g.box([-30, 0, -30], [30, 0, 30], 'grass');
+  const A = new V.Actors(fakeStage(g), { creature: 'duck', count: 3, area: [[-4, -4], [4, 4]], on: 'ground', shadow: false });
+  const box = (x0, x1) => new V.THREE.Frustum().setFromProjectionMatrix(new V.THREE.OrthographicCamera(x0, x1, 40, -40, -100, 100).projectionMatrix);
+  assert.ok(A.inView(box(-20, 20)), 'in view');
+  assert.ok(!A.inView(box(60, 100)), 'out of view');
+  A.sets[0].mesh.castShadow = true;
+  assert.ok(A.inView(box(60, 100)), 'a shadow caster is always posed');
+});
+
+// ---- render cache ----------------------------------------------------------------------------------------
+const { mergeRects } = await import('../../static/voxel/lib/cache.js');
+test('mergeRects: covers every rect, at most `max`, overlapping rects merge', () => {
+  let seed = 3; const R = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  for (const n of [0, 1, 5, 40, 400]) {
+    const rs = Array.from({ length: n }, () => ({ x: R() * 500, y: R() * 900, w: 4 + R() * 40, h: 4 + R() * 40 }));
+    const out = mergeRects(rs, 585, 1266);
+    assert.ok(out.length <= 6, `${n}: ${out.length} rects`);
+    for (const r of rs) assert.ok(out.some((q) => q.x <= r.x && q.y <= r.y && q.x + q.w >= r.x + r.w && q.y + q.h >= r.y + r.h), `${n}: a rect isn't covered`);
+  }
+  assert.deepEqual(mergeRects([{ x: 0, y: 0, w: 10, h: 10 }, { x: 5, y: 5, w: 10, h: 10 }, { x: 300, y: 300, w: 10, h: 10 }], 585, 1266).map((r) => [r.x, r.y, r.w, r.h]), [[0, 0, 15, 15], [300, 300, 10, 10]]);
 });
 
 // ---- short links (/v/<short>/) --------------------------------------------------------------------------

@@ -68,7 +68,10 @@ Changing sky colors recolors every shadow. Blue sky + warm sun = classic dayligh
 gives an inked look), `gridLine` (line width for `grid` materials), `jitter` (× material jitter),
 `saturation` (albedo saturation; 0 = clay), `emissive` (× glow), `bakedLight` (× baked light).
 
-**wind** `{ strength, speed, direction: [x, z] }` — sway materials. **water** `{ scale, speed, strength,
+**wind** `{ strength, speed, direction: [x, z] }` — sway materials. (Water notes: `wave` ripples only top faces; water faces glow
+with their own colour, so a deep vertical water section (a cutaway wall) reads milky — use a near-clear `kind: 'glass'`
+material below the surface layer for cutaways; things seen through water are tinted by its colour; particles behind
+transparent faces are hidden.) **water** `{ scale, speed, strength,
 glow (in-scattering so water keeps its color in shade), transmission (refraction; false = cheap alpha) }`.
 
 **exposure** (1) and **toneMapping**: `'neutral'` (default, Khronos PBR Neutral: palette colors stay true —

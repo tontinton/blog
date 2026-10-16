@@ -134,9 +134,14 @@ const stage = new Stage({
     target: [x,y,z] (default: bounds center), offset: [dx, dy] (screen fractions),
     controls: true, pan: false, damping: 0.08, minPitch: 4, maxPitch: 88, minZoom: 0.6, maxZoom: 5,
     autoRotate: 0 (deg/s), idleRotate: 0 (deg/s after 6 s idle),
+    // pan: true | { keys: true, dblclick: true, clamp: 0, speed: 1 } — move around, not just orbit (nav.js, big
+    // scenes): right-drag / ⇧-drag / two fingers move over the ground (it sticks to the finger), wheel + pinch zoom
+    // toward the pointer, W A S D move (⇧ faster), Q / E turn, + / − zoom, R / Home back to the whole scene,
+    // double-click / double-tap glides to the voxel under it. The orbit target stays inside the scene bounds (+ clamp world units). The hint follows.
   },
   ui: { title, subtitle, credit, back: '/' | url | false, backLabel, hint: true | 'text' | false, loader: true, theme: 'auto'|'light'|'dark', css },
-  pixelRatio (max, default min(devicePixelRatio, 2)), adaptive: true (drop resolution when slow), msaa (4; 2 on hi-dpi), container, shotTime,
+  // (the default hint matches the input — touch or mouse — and says how to move when camera.pan is on)
+  pixelRatio (max, default min(devicePixelRatio, 2); 1.5 on touch), adaptive: true (when slow: 4× → 2× MSAA, then lower resolution), msaa (4; 2 on hi-dpi), container, shotTime,
   fps: { max: 60, idle: 30, idleAfter: 3 } (frame pacing: cap on fast screens, drop to `idle` fps when the camera hasn't moved for
   `idleAfter` s — keeps laptops cool; `?fps=N` forces a rate),
   cache: true (incremental rendering, below; false = redraw everything every frame, like `?nocache`),
@@ -147,7 +152,7 @@ const stage = new Stage({
 |---|---|
 | `add(grid, opts)` → `THREE.Group` | mesh + add. opts: `palette`, `position`, `rotation` (deg Y or `[x,y,z]`), `scale`, `center` (`false` default → grid coords = world coords; `'bottom'`/`'center'`), `pivot: [x,y,z]` (group origin at this grid point — rotate a blade around its hub), `instances: [[x,y,z,rotY,scale] \| {position,rotation,scale}]`, `bake: { ao: true \| { radius: 6, rays: 20 }, light: true, context: grid \| [grids] }` (`context`: grids in the same coordinates that occlude/emit/block light during the bakes but aren't meshed — a moving part added with `pivot` = `position` gets the room's AO + baked lamp light; sync `add` only), `ao` (vertex AO, true), `greedy` (true), `hooks` (GLSL, below), `shading` (`'cel'` \| `['cel', 'rim']` — registered hook bundles), `cluster` (4: mesh as N×N-chunk columns, frustum-culled; 0 = one mesh), `keepGrid` (true; false frees the voxels after meshing), `shadow`, `receive`, `fit` (camera fit, true), `contact` (ground contact shadow, true), `name` |
 | `addAsync(grid, opts)` → Promise\<Group\> | `add` with cluster meshing + bakes in Web Workers (`workers: n \| 0`, `onProgress(f)`) |
-| `world(spec)` → Promise\<`{ group, grid, palette, assets, extras, stats }`\> | big scene from parallel region modules — see [big-scenes.md](big-scenes.md) |
+| `world(spec)` → Promise\<`{ group, grid, palette, assets, extras, pois, stats }`\> | big scene from parallel region modules — see [big-scenes.md](big-scenes.md) |
 | `actors(opts)` → Actors | animated creatures (`{ creature, count, variants, behavior, area, path, target, on, … }`) — see [animation.md](animation.md) |
 | `animate(obj, { spin: [x,y,z] rad/s, bob, sway, speed, phase })` | procedural motion for any object/group |
 | `rebuild(group)` | re-mesh after editing `group.userData.model.grid` |
@@ -156,6 +161,8 @@ const stage = new Stage({
 | `light({ type: 'point'\|'spot', position, color, intensity: 20, distance: 30, decay: 1.6, shadow, target, angle, penumbra })` | real dynamic light |
 | `particles(opts)` → Particles | see below |
 | `onUpdate((t, dt) => …)` | per frame; `t` frozen by `?t=` |
+| `flyTo([x,y,z], { zoom, yaw, pitch, dur, hop })` | glide the orbit target + zoom (and swing to `yaw` / `pitch`, deg) — wall-clock eased, zooming out a little on long flights (`hop`, 1); the viewer's pointer cancels it (`tour.js`) |
+| `tour(pois, { order, groups, home, yaw, label })` | "‹ ✦ Explore ›" points-of-interest tour (top-right bar + grouped panel, ←/→ keys): `pois` = `[{ label, icon, target, zoom, yaw, pitch, group }]`; `world()` returns the regions' `ctx.emit('poi', …)` as `pois` (group = region). No UI in `?shot` |
 | `models`, `actorSystems`, `particleSystems` | what's been added (`model = group.userData.model`: `{ grid, palette, opts, meshes, stats }`) |
 | `progress(text, fraction)` | async: update loader, yield a frame (await between heavy steps) |
 | `setLook(spec)` / `updateLook(patch)` | live look change (deep-merged) |
@@ -174,7 +181,7 @@ Camera orientation: at the default yaw (45°; most pieces use 35–40°) the cam
 toward the origin — the +z/+x sides of a scene are the front; tall things belong at −z/−x.
 
 URL params every piece understands: `?debug` (tweak panel + stats overlay), `?look=name`,
-`?lookjson={…}`, `?t=seconds`, `?yaw= &pitch= &zoom=`, `?target=x,y,z` (close-ups), `?dpr=`, `?region=a,b`
+`?lookjson={…}`, `?t=seconds`, `?yaw= &pitch= &zoom=`, `?target=x,y,z` (close-ups), `?dpr=`, `?msaa=`, `?region=a,b`
 (world: build only those), `?shot` (used by shot.mjs), `?nocache` (no incremental rendering), `?bench` (log frame
 costs after load, at rest and orbiting).
 
@@ -220,16 +227,32 @@ P.add('rune', { color: '#335', custom: [2, 0, 0, 0] });   // mc.x = 2 for rune v
 
 Full guide: [animation.md](animation.md). One draw call per creature variant (rigged instancing:
 `createVoxelMaterial({ rig: true })` reads per-part matrices from `uRig`). `stage.actors(opts)` → `Actors` with `.agents` (live
-`{ x, y, z, heading, speed, state }`), `.object`, `.ground` (`at(x,z)`, `ok(x,z)`, `region(x,z)`), `.dispose()`.
+`{ x, y, z, heading, pitch, speed, air, state }`), `.object`, `.ground` (`at(x,z)`, `ok(x,z)`, `region(x,z)`), `.dispose()`.
 Options: `creature` (name \| rig \| factory), `options` (creature opts or array = variants), `variants`, `count`,
-`behavior` (`'wander' 'path' 'follow' 'circle' 'flock' 'still'` \| `(ag, dt, t, actors) => {}`), `area`,
-`groups: [{ area \| path \| center + radius, count }]`, `path`, `loop`, `spread`, `center`, `radius`, `altitude`, `target`,
-`spacing`, `ground` (`'auto'` \| grid \| group \| y), `on` (`'ground'` \| `'water'`), `maxStep`, `region`,
-`speed`, `scale`, `tints`, `idle`, `sprint`, `shadow` (`'auto'` \| true \| `'blob'` \| false), `seed`.
+`behavior` (`'wander' 'path' 'follow' 'circle' 'flock' 'still' 'hop'` \| `(ag, dt, t, actors) => {}`), `area`,
+`groups: [{ area \| path \| center + radius \| spots, count }]`, `path` (`[x,z]` follow the ground, `[x,y,z]` exact y),
+`loop` (`true` closed \| `false` once, then queue at the end \| `'restart'` open, wrap to the start), `spread`
+(lane jitter, or `[start, end]`), `wobble` (erratic sway: path, hop, circle/flock), `spots: [[x, y, z, headingDeg?], …]`
+(explicit placements — agent i at `spots[i % n]`, `count` defaults to `n` (`'hop'`: ⌈n/2⌉), `y` exact or `null` = ground,
+heading 0 = +z / 90 = +x), `arc` (hop flight arc, × distance, 0.25; < 0 dips), `center`, `radius`, `altitude`, `target`,
+`spacing` (follow gap; queue gap of `loop: false`), `ground` (`'auto'` \| grid \| group \| y), `on` (`'ground'` \|
+`'water'`), `maxStep`, `region`, `speed`, `scale`, `tints`, `idle` (wander pauses, hop perch time), `sprint`,
+`shadow` (`'auto'` \| true \| `'blob'` \| false), `seed`.
+Explicit y (spot, 3D path) is the rig's anchor: feet, or `rig.hang` — a gibbon's hand-hold line (branch underside),
+a langur's seat (branch top). In `stage.world()` emits differing only in area/path/center/radius/spots/count/seed merge.
 
-Creatures: `cat dog fox sheep pig walker bird butterfly duck fish` (+ `quadruped(opts)` builder).
-`rig(parts, { scale, speed, stride, sprint, idle, lift, fly, swim, anim })` makes your own; parts are
-`{ name, role: 'body'|'head'|'tail'|'leg'|'arm'|'wing'|'fin'|'static', side, pair, grid, pivot, animate }`.
+Creatures: `cat dog fox squirrel sheep pig walker bird butterfly duck fish` (+ `quadruped(opts)` builder);
+wildlife (`gen/wildlife.js`): `elephant` (`baby`, `tusks`, `skin` base colour; curling trunk, flapping ears), `tapir` (`baby` = striped calf), `sunbear`, `boar` (`baby` = striped
+piglet → `follow` the sow), `muntjac` (`male`), `tiger`, `macaque` (`kind: 'longtail'|'pigtail'`, `baby`; sits when stopped), `monitor`,
+`otter` (water; `baby`, `fur`), `snake` (`kind: 'python'|'cobra'|'viper'`); `slideYaw(dx, dz, yaw)` / `slidePitch(dy, dz, pitch)`: one Euler
+about a pivot 120 voxels away ≈ a rigid slide + turn of a part — chains of segments (tails, trunks, snakes) without a part hierarchy.
+thai (`gen/thai.js`): `longtailBoat`, `kayakBoat` (boats on `path`s, `on: 'water'`);
+canopy (`gen/canopy.js`): `gibbon` (`coat: 'black'|'buff'`, `pose: 'hang'|'sit'`), `langur` (`pose: 'sit'|'walk'`),
+`hornbill` (`eye`), `kingfisher` (`blue cyan orange`), `bat` (`kind: 'cave'|'fox'`), `birdwing` (`kind: 'golden'|'rajah'|{…}`),
+`dragonfly` (`color: 'blue'|'red'|hex`).
+`rig(parts, { scale, speed, stride, sprint, idle, lift, fly, swim, hang, center, anim })` makes your own (`anim.fold`:
+perched wing pose); parts are `{ name, role: 'body'|'head'|'tail'|'leg'|'arm'|'wing'|'fin'|'static', side, pair, grid,
+pivot, animate }` — `animate(ctx) → { rx, ry, rz, dx, dy, dz } | { matrix }` (ctx: `t agent moving phase air hang flap rx ry rz`).
 `heightField(sources, area, on, clear, maxStep)` is the terrain sampler actors use.
 
 ---
@@ -249,7 +272,7 @@ The lab catalog renders any kind: `?scene=catalog[&kind=creature|shading][&categ
 ## Particles (`particles.js`)
 
 `stage.particles({ preset, ...overrides })`. Presets: `fireflies dust sparkles snow rain embers bubbles
-petals leaves cubes smoke`. `mist` (waterfall spray) too.
+petals leaves cubes smoke`. `mist` (waterfall spray) and `haze` (big, faint drifting morning haze — lakes, valleys) too.
 Options: `count`, `box: [[x0,y0,z0],[x1,y1,z1]]` (world = grid coords; default
 scene bounds), `motion: 'drift'|'fall'|'rise'|'float'|'plume'`, `speed`, `turbulence`, `sway`,
 `shape: 'soft'|'square'|'cube'`, `lit` (cubes: sun-lit), `color`/`colors`, `size` (world units),
@@ -288,7 +311,7 @@ All accept `seed` (or `R`, an rng) and material overrides. Foliage uses `mode: '
 · `bricks(g, a, b, { size: [3,2], stones, mortar, axis, stagger })` (big stones + mortar; `axis: 'y'` = floor planks/paving)
 · props: `crate`, `barrel`, `table`, `chair`, `bed`, `bookshelf`, `fireplace(g, p, side, { w, h, stone, fire })`,
   `bench(g, p, side, { length })`, `signpost(g, p, { text })`, `lantern(g, ceilingPoint, { drop })`, `campfire(g, p)` → fire top
-· `person(g, p, { side, pose: 'stand'|'wave'|'sit', height: 7|8, skin, shirt, pants, hair, hat, seed })` — tiny ~7-voxel people (random colors per seed);
+· `person(g, p, { side, pose: 'stand'|'wave'|'sit', height: 7|8, skin, shirt, pants, hair, hat, seed })` — tiny ~7-voxel people (random colors per seed; colours may be material names or CSS colours);
   2 wide across its facing, `p` = the lower across-axis cell; `pose: 'sit'` at a `bench`'s `p` sits on it.
   `house` windows `[{ side, at, y }]`: `at` = offset along the wall from its start corner, `y` = above the floor
 · `bridge(g, a, b, { width, arch, deck, rail, post })` · `boat(g, keelStern, { length, width, height, hull, hullTop, deck, cabin, mast, mastAt })` (clears its interior — drop it into water; keel y, deck y + height − 2, rim y + height − 1: height ≥ 3, width ≥ 5 for a deck)
@@ -296,6 +319,33 @@ All accept `seed` (or `R`, an rng) and material overrides. Foliage uses `mode: '
 · `car(g, p, { color, axis, glass, wheel, light })`
 · (all registered with examples — `?scene=catalog` in the lab shows each one)
 · nature.js also has `waterfall(g, top, bottomY, { width, depth, water, foam })` (pair with `stage.particles({ preset: 'mist', box })`)
+
+**jungle.js** (`JUNGLE` materials) — `dipterocarp(g, p, { height: 62, crownRadius, buttresses, buttressLength, buttressHeight, limbs, leaves, flowers, bias })` → `{ top, crownY, crownRadius, limbs, tips, trunkTop }` (emergent giant, buttress fins, flat cauliflower crown)
+· `strangler(g, p, { height: 42, crownRadius, columnRadius, roots, aerial, door, doorAngle, fruit })` → `{ top, crownY, crownRadius, limbs, tips, hollow }` (hollow root lattice + aerial roots + figs)
+· `jungleTree(g, p, { height, style: 'round'|'layered'|'spreading'|'tall', crownRadius, crownDepth, bias, flowers: 'flameFlower'|'yellowFlower', flowerAmount, mask })` → `{ top, crownY, crownRadius, limbs }`
+· `rainforest(g, [x0,z0], [x1,z1], { density, height: [18,30], emergents: n | [[x,z]…], emergentHeight, flowering, gaps, on, avoid: [[[x0,z0],[x1,z1]]…], overhang: 2, border: true, edge: 7, clip })` → `{ trees, emergents, top }` — continuous canopy on whatever g.top finds (~55k quads per 80×80; plants on any non-water top, so build houses after it or `avoid` them)
+· `bamboo(g, p, { height: 19, culms, spread, fan, arch })` → `{ tips }` · `banana(g, p, { height, leaves, length, fruit })` → `{ bunch }`
+· `deadTree(g, [x, waterY, z], { bed, height, branches })` → `{ top, perch, branches }` (drowned trunk, reads through the water; anchors are solid voxels — perch a bird at y + 1)
+
+**understory.js** (`UNDERSTORY` materials) — `fern(g, p, { radius, height, fronds, pinnae, every, leaves })` · `treeFern(g, p, { height, length, fronds })` → `{ crown }`
+· `alocasia(g, p, { count, height, length, tilt })` (giant heart leaves, pale midrib) · `rafflesia(g, p, { diameter: 9, buds, vine, rotation })` → `{ center, top }`
+· `heliconia(g, p, { height, form: 'upright'|'hanging', spikes, bracts })` · `rattan(g, p, { height, to: trunkSidePoint, stems })` → `{ tips }`
+· `liana(g, a, b, { sag, hang, twist, loops, leaves, thick, coil })` → `{ path, mid }` · `lianas(g, branchTips, { connect, dangle, drift, ground })`
+· `epiphytes(g, { area, on, density, mix: { moss, bromeliad, orchid, fern } })` (run after trees) · `lilyPads(g, [x0,z0], [x1,z1], { y: waterY, coverage, flowers })` · `lotus(g, p, { bud, size: 'small', stem })`
+· `pitcherPlant(g, p, { count, big })` · `fallenLog(g, a, b, { radius, hollow, moss, fungi, ferns })` → `{ top }`
+· `undergrowth(g, [x0,z0], [x1,z1], { on: [groundMats], density: 1, avoid: [[[x0,z0],[x1,z1]]], mix })` → `{ count, byType }` (≈12k quads per 80×80 at density 1; always pass `on`)
+
+**karst.js** (`KARST` materials) — `karst(g, base, { height, radius: r|[rx,rz], profile: 'tower'|'dome'|'massif', peaks, lean, water, notch, streaks, ledges, shrubs, trees, gardens, vines, cap: true|'sparse'|false, leaves, trunk, hollow, waterfall: side, seed })` → `{ top, summits, crown, ledges, faces: {'+x': p,…}, notch, waterfall: {top, bottomY, axis, width}, bounds }` (sheer streaked limestone tower/massif, waterline notch, ledge shrubs/trees, hanging gardens, vine curtains, jungle cap; a hollow 4-voxel shell — dig into it only with `cave`)
+· `cave(g, mouth, { dir, width: 8, height: 10, depth: 14, chamber, glow, water, level, vines, seed })` → `{ mouth, inside, ceiling, end, pool }` · `stalactites(g, a, b, { density, floor, length, with, on })` · `karstIslet(g, bed, { water, height (above water), radius, … })`
+
+**thai.js** (palette `{ ...NATURE, ...BUILD, ...THAI }`; water-borne p = [x, waterY, z], waterY = TOP water voxel; sides '+x'|'-x'|'+z'|'-z')
+· `raftHouse(g, p, { side, w, d, wallH, roof: 'thatch'|'tin', porch, hammock, lit, ladder, laundry, moor, slope })` → `{ deck, door, porch, bench, benchSide, mooring, mooringDir, corners, ridge }` (floating bungalow, deck at waterY+1)
+· `walkway(g, [[x,z],…], { y: deck, width, every, rail })` (floating bamboo boardwalk on blue barrels)
+· `longtail(g, p, { dir, length, canopy, passengers, driver, shaft })` → `{ bow, stern, prop, seats, rope, keel }` (keel waterY−1, clears water inside; fine at [0,0,0] with no water)
+· `spiritHouse(g, p, { side, pillar, table })` → `{ top, table, platform }` · `sala(g, p, { side, w, d, postH, raise, stilts })` → `{ floor, ridge, front }`
+· `treeHouse(g, trunkBase, { height | y, trunkR, size, side, stair: 'spiral'|'ladder', bridges, tree })` → `{ deck, bridgeAnchors, anchors, hut, stairBase }`
+· `ropeBridge(g, a, b, { width, sag, railH, every })` → `{ mid }` · `kayak(g, p, { dir, seats, people, color })` · `parkSign(g, p, { text, side })` · `jetty(g, a, b, { width, every, bottom, lamp })`
+· creatures `longtailBoat` / `kayakBoat` (one-part rigs at world scale): `stage.actors({ creature: 'longtailBoat', on: 'water', behavior: 'path', path, options: { canopy: true } })`
 
 ---
 

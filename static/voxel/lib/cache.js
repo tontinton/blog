@@ -134,6 +134,7 @@ export class RenderCache {
     let k = 0;
     for (const name of ['uAO', 'uBevel', 'uLook', 'uWind', 'uWater']) { const v = u[name].value; for (const c of ['x', 'y', 'z', 'w']) { if (us[k] !== v[c]) { changed = true; us[k] = v[c]; } k++; } }
     if (us[k] !== u.uSeed.value) { changed = true; us[k] = u.uSeed.value; }
+    if (changed) this.camVersion = (this.camVersion ?? 0) + 1;
     return changed;
   }
 
@@ -178,7 +179,10 @@ export class RenderCache {
       add(_b2, shadow);
       it.box.copy(box); it.sig = sig;
     };
-    // voxel models
+    // voxel models. Swaying / flickering / rippling voxels of models that stay put redraw the same screen rects
+    // every frame while the camera rests (and partial frames only happen then): a big forest has thousands of
+    // such 16³ boxes, so they're projected + merged once per camera pose and reused
+    const still = [], key = [this.camVersion, wind, water, U, sunCasts && sun.toArray().map((v) => v.toFixed(5)), s.post.w, s.post.h];
     for (const m of s.models) {
       if (m.palette.version !== m._palVersion) { if (m._palVersion != null) s._sceneDirty = true; m._palVersion = m.palette.version; }
       const visible = m.group.visible && isVisible(m.group);
@@ -189,17 +193,22 @@ export class RenderCache {
       if (!visible) continue;
       if (m.timeHooks) add(_box, casts && m.moving);
       for (const mesh of m.meshes) {
-        const bx = mesh.geometry.userData.boxes;
-        if (!bx) continue;
+        if (!mesh.geometry.userData.boxes) continue;
+        if (!m.moving && !mesh.isInstancedMesh) { still.push(mesh); key.push(mesh.id, mesh.castShadow); continue; }
         src = `anim ${m.group.name}`;
-        // instances: the boxes are per copy — use the bounds of all copies
-        const each = mesh.isInstancedMesh ? (list, pad, fn) => { if (list?.length) { mesh.computeBoundingBox(); fn(_b2.copy(mesh.boundingBox).expandByScalar(pad).applyMatrix4(mesh.matrixWorld)); } }
-          : (list, pad, fn) => list && addBoxes(list, mesh.matrixWorld, pad, fn);
-        if (wind) each(bx.sway, 0.5, (b) => add(b, mesh.castShadow && U !== 'static'));
-        each(bx.flicker, 0.05, (b) => add(b, false, true));
-        if (water) each(bx.water, 0.05, (b) => add(b, false));
+        this._animBoxes(mesh, wind, water, U, add);
       }
     }
+    const k = key.join(',');
+    if (k !== this._stillKey) {
+      this._stillKey = k;
+      const mine = [];
+      const addMine = (box, shadow, emissiveOnly = false) => { const r = this._project(box, shadow && sunCasts ? sun : null); if (r) { r.emissive = emissiveOnly; mine.push(r); } };
+      for (const mesh of still) this._animBoxes(mesh, wind, water, U, addMine);
+      this._stillRects = mergeRects(mine, s.post.w, s.post.h, 12);
+    }
+    src = 'anim (still models, cached per camera pose)';
+    for (const r of this._stillRects) { out.push({ ...r }); why.push([src, r.w * r.h]); }
     // actors: every agent, every frame (legs, tails, heads move even when standing)
     for (const a of s.actorSystems) {
       if (!isVisible(a.object)) continue;
@@ -248,6 +257,17 @@ export class RenderCache {
       this.union = m.reduce((a, b) => a + b, 0) / (gw * gh);
     }
     return mergeRects(out, s.post.w, s.post.h);
+  }
+
+  // the animated-voxel boxes of one mesh (swaying with wind, flickering, rippling water) → add(box, shadow, emissiveOnly)
+  _animBoxes(mesh, wind, water, U, add) {
+    const bx = mesh.geometry.userData.boxes;
+    // instances: the boxes are per copy — use the bounds of all copies
+    const each = mesh.isInstancedMesh ? (list, pad, fn) => { if (list?.length) { mesh.computeBoundingBox(); fn(_b2.copy(mesh.boundingBox).expandByScalar(pad).applyMatrix4(mesh.matrixWorld)); } }
+      : (list, pad, fn) => list && addBoxes(list, mesh.matrixWorld, pad, fn);
+    if (wind) each(bx.sway, 0.5, (b) => add(b, mesh.castShadow && U !== 'static'));
+    each(bx.flicker, 0.05, (b) => add(b, false, true));
+    if (water) each(bx.water, 0.05, (b) => add(b, false));
   }
 
   // world box (optionally swept along the sun direction down to the floor: where its shadow can fall) →
@@ -308,28 +328,53 @@ function addBoxes(list, matrix, pad, fn) {
 
 /**
  * Merge overlapping / nearby rects (two draws cost more than one slightly bigger one) and cap the count —
- * every rect is a scene pass on the CPU side.
+ * every rect is a scene pass on the CPU side. Runs every frame over one rect per moving thing (hundreds of
+ * agents in a big scene), so it's ~O(n²) once, not O(n³): a grown rect is re-checked in place instead of
+ * restarting the whole scan, and the capping phase keeps each rect's cheapest partner.
  */
 export function mergeRects(rects, W, H, max = 6) {
   const out = rects.map((r) => ({ x0: r.x, y0: r.y, x1: r.x + r.w, y1: r.y + r.h, emissive: r.emissive }));
   const area = (r) => (r.x1 - r.x0) * (r.y1 - r.y0);
   const union = (a, b) => ({ x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1), emissive: a.emissive && b.emissive });
+  const waste = (a, b) => (Math.max(a.x1, b.x1) - Math.min(a.x0, b.x0)) * (Math.max(a.y1, b.y1) - Math.min(a.y0, b.y0)) - area(a) - area(b);
   const slack = 64 * 64; // merging is free if it adds less than this much area
-  let merged = true;
-  while (merged) {
-    merged = false;
-    for (let i = 0; i < out.length && !merged; i++) for (let j = i + 1; j < out.length; j++) {
-      const u = union(out[i], out[j]);
-      if (area(u) <= area(out[i]) + area(out[j]) + slack) { out[i] = u; out.splice(j, 1); merged = true; break; }
+  // 1. merge every pair whose union adds < slack; a rect that grew is checked against all the others again
+  for (let pass = true; pass;) {
+    pass = false;
+    for (let i = 0; i < out.length; i++) {
+      for (let j = i + 1; j < out.length; j++) {
+        if (waste(out[i], out[j]) > slack) continue;
+        out[i] = union(out[i], out[j]);
+        out[j] = out[out.length - 1]; out.pop();
+        j = i; pass = true; // rescan the rest against the grown rect
+      }
     }
   }
-  while (out.length > max) {
-    let best = null, bi = 0, bj = 1;
-    for (let i = 0; i < out.length; i++) for (let j = i + 1; j < out.length; j++) {
-      const u = union(out[i], out[j]), cost = area(u) - area(out[i]) - area(out[j]);
-      if (!best || cost < best.cost) { best = { u, cost }; bi = i; bj = j; }
+  // 2. too many: merge the cheapest pair until `max` are left (best partner per rect, refreshed as rects change)
+  if (out.length > max) {
+    const best = new Array(out.length);
+    const refresh = (i) => {
+      let b = Infinity, k = -1;
+      for (let j = 0; j < out.length; j++) if (j !== i) { const w = waste(out[i], out[j]); if (w < b) { b = w; k = j; } }
+      best[i] = { cost: b, j: k };
+    };
+    for (let i = 0; i < out.length; i++) refresh(i);
+    while (out.length > max) {
+      let bi = 0;
+      for (let i = 1; i < out.length; i++) if (best[i].cost < best[bi].cost) bi = i;
+      const bj = best[bi].j;
+      out[bi] = union(out[bi], out[bj]);
+      const last = out.length - 1; // swap-remove bj
+      out[bj] = out[last]; best[bj] = best[last]; out.pop(); best.pop();
+      const a = bi === last ? bj : bi; // where the merged rect lives now
+      for (let i = 0; i < out.length; i++) {
+        if (i === a) continue;
+        const p = best[i].j;
+        if (p === bj || p === bi || p === last || p === a) refresh(i);    // its partner changed or moved
+        else { const w = waste(out[i], out[a]); if (w < best[i].cost) best[i] = { cost: w, j: a }; } // the grown rect may be closer now
+      }
+      refresh(a);
     }
-    out[bi] = best.u; out.splice(bj, 1);
   }
   return out.map((r) => ({ x: r.x0, y: r.y0, w: r.x1 - r.x0, h: r.y1 - r.y0, emissive: r.emissive }));
 }

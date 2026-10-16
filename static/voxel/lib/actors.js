@@ -11,28 +11,47 @@
 //   stage.actors({ creature: 'duck', options: { baby: true }, count: 4, behavior: 'follow', target: mom });
 //   stage.actors({ creature: 'cat', behavior: (ag, dt, t, actors) => { ag.x = …; ag.z = …; ag.heading = …; ag.speed = …; } });
 //
+//   stage.actors({ creature: 'langur', behavior: 'still', spots: [[12, 31, -4, 90], [15, 28, -2]] });     // sit on branches
+//   stage.actors({ creature: 'kingfisher', behavior: 'hop', spots: [[0, 3, 0], [8, 2, 3], [4, 4, 9]] });  // perch, fly, perch
+//   stage.actors({ creature: 'gibbon', count: 3, behavior: 'path', path: [[0, 30, 0], [20, 32, 4], …] }); // 3D route
+//
 // Options: creature (registered name | rig | factory(opts) → rig), options (creature opts, or an array =
 // one variant each), variants (n rigs from different seeds — e.g. walkers with varied clothes; n × parts
-// draw calls), count, behavior ('wander' | 'path' | 'circle' | 'flock' | 'follow' | 'still' | fn),
+// draw calls), count, behavior ('wander' | 'path' | 'circle' | 'flock' | 'follow' | 'still' | 'hop' | fn),
 // area [[x0,z0],[x1,z1]] (wander/spawn region; default: the ground's bounds), groups [{ area, count }] (one
-// system over several areas/paths/circles: [{ area | path | center + radius, count }]), path [[x,z] | [x,y,z], …],
-// loop (true), spread (path lane jitter), center [x,y,z] + radius (circle/flock), target (follow: Actors |
-// agent | Object3D | [x,z] | t → [x,z]), spacing (follow gap), ground ('auto' = every model | VoxelGrid |
-// group | number), on ('ground' | 'water'), maxStep (1, climbable step), region ('main' = stay in the largest
-// connected walkable area of `area` — streets, not roofs | 'any'), speed [min,max] voxels/s, scale,
-// tints [colors] (per-instance multiply), idle [min,max] s, sprint (chance a wander leg is run at 2×),
-// shadow ('auto' | true | 'blob' | false — 'auto' = real shadows, or blobs when look.sun.update isn't
-// 'always', so big static-shadow worlds stay cheap), seed.
+// system over several areas/paths/circles/spot sets: [{ area | path | center + radius | spots, count }]),
+// path [[x,z] | [x,y,z], …] (3D points: y is exact — no ground snapping; fliers pitch along it),
+// loop (true = closed | false = walk once, stop queued at the end | 'restart' = open, jump back to the start —
+// streams: bats out of a cave), spread (path lane jitter; [start, end] = a stream that disperses), wobble
+// (voxels of erratic sway on path/hop flights), spots [[x, y, z, headingDeg?], …] (explicit placements: agent i
+// starts at spots[i % n], count defaults to spots.length; y is exact (null = ground); heading 0 = facing +z,
+// 90 = +x), arc (hop flight arc height as a fraction of the distance, 0.25; negative dips), center [x,y,z] +
+// radius (circle/flock), target (follow: Actors | agent | Object3D | [x,z] | t → [x,z] | 'id' = the system created
+// with that `id` — plain data, so stage.world region emits can link a sow and her piglets), id, spacing (follow gap,
+// path queue gap), ground ('auto' = every model | VoxelGrid | group | number), on ('ground' | 'water'),
+// maxStep (1, climbable step), region ('main' = stay in the largest connected walkable area of `area` —
+// streets, not roofs | 'any'), speed [min,max] voxels/s, scale, tints [colors] (per-instance multiply),
+// idle [min,max] s (wander pauses, hop perch time), sprint (chance a wander leg is run at 2×), shadow ('auto'
+// | true | 'blob' | false — 'auto' = real shadows, or blobs when look.sun.update isn't 'always', so big
+// static-shadow worlds stay cheap), seed.
 //
-// Agents are plain objects ({ x, y, z, heading, speed, … }) in actors.agents — read them to attach lights
-// or cameras, or write them from a custom behavior.
+// Behaviors: 'still' stands/sits/perches (idle anim only; fliers on spots fold their wings), 'hop' perches
+// at a spot for `idle` s, then flies a smooth arc to another free spot of its own set (one spot: a short
+// sally out and back) — kingfishers, hornbills, butterflies; works for leaping non-fliers too.
+//
+// Agents are plain objects ({ x, y, z, heading, pitch, speed, air, … }) in actors.agents — read them to attach
+// lights or cameras, or write them from a custom behavior. air: 0 perched … 1 flying (fliers).
 //
 // Rig format (see gen/creatures.js, or build your own with rig()):
-//   { palette, parts: [{ name, role, side, pair, grid, pivot: [x,y,z], animate? }], center, size, stride, speed, anim, scale, lift, fly, swim }
+//   { palette, parts: [{ name, role, side, pair, grid, pivot: [x,y,z], animate? }], center, size, stride, speed, anim, scale, lift, fly, swim, hang }
 //   Rig space: feet at y = 0, facing +z, x across. Roles drive the procedural animation:
 //   'body' (bob), 'head' (nod / look around), 'tail' (sway), 'leg' (swing; side ±1, pair 0 front | 1 back),
-//   'arm' (swing opposite the legs), 'wing' (flap; side ±1), 'fin' (wiggle), 'static'.
-//   part.animate({ t, agent, moving, phase }) → { rx, ry, rz } overrides the role's rotation (radians).
+//   'arm' (swing opposite the legs), 'wing' (flap; side ±1; folded to anim.fold when perched), 'fin' (wiggle), 'static'.
+//   part.animate({ t, agent, moving, phase, air, hang, flap, rx, ry, rz }) → { rx, ry, rz, dx, dy, dz } overrides
+//   the role's rotation (radians, about the pivot) and adds a translation (rig voxels); or → { matrix } (a
+//   THREE.Matrix4 rig-space transform of the part — for joint chains: body → head, shoulder → arm…).
+//   hang (rig-space y of the hand grip, e.g. a gibbon's raised hands): agents whose y is explicit (3D path,
+//   spot) hang from it — y is the hand-hold line and the rig is drawn hang × scale below it.
 import * as THREE from './three.js';
 import { buildMesh, geometryFromArrays } from './mesher.js';
 import { createVoxelMaterial, createVoxelDepthMaterial } from './material.js';
@@ -40,13 +59,18 @@ import { rng } from './random.js';
 import { srgbToLinear } from './color.js';
 import { lookup, list } from './registry.js';
 
-const _m = new THREE.Matrix4(), _r = new THREE.Matrix4(), _o = new THREE.Matrix4(), _t = new THREE.Matrix4();
-const _q = new THREE.Quaternion(), _e = new THREE.Euler(), _v = new THREE.Vector3(), _s = new THREE.Vector3(), _y = new THREE.Vector3(0, 1, 0);
+const _m = new THREE.Matrix4(), _o = new THREE.Matrix4(), _t = new THREE.Matrix4();
+const _box = new THREE.Box3();
+const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _v = new THREE.Vector3(), _s = new THREE.Vector3(), _y = new THREE.Vector3(0, 1, 0), _x = new THREE.Vector3(1, 0, 0);
+const DEG = Math.PI / 180;
 
 /**
  * Build a rig from parts: [{ name, role, side, pair, grid, pivot }], all grids sharing one palette.
  * o: center, stride (rig voxels per gait cycle), speed [min,max] (world voxels/s), anim {...}, scale (default
- * size), lift (rig-space y offset on water; negative sinks), idle [min,max] s, sprint (chance), fly, swim.
+ * size), lift (rig-space y offset on water; negative sinks), idle [min,max] s, sprint (chance), fly, swim,
+ * hang (rig-space y of the hand grip: agents with an explicit y — 3D path, spot — hang from it).
+ * anim: legSwing, armSwing, bob, tailSway, tailSpeed, tailLift, headNod, graze, flap, flapSpeed, glide (0..1
+ * share of time gliding), fold ({ rx, ry, rz } of a side +1 wing when perched; default swept back along the body).
  */
 export function rig(parts, o = {}) {
   const palette = o.palette ?? parts[0].grid.palette;
@@ -59,9 +83,9 @@ export function rig(parts, o = {}) {
     size: [mx[0] - mn[0], mx[1] - mn[1], mx[2] - mn[2]],
     stride: o.stride ?? Math.max(1, (mx[2] - mn[2]) * 0.6),
     speed: o.speed ?? [2, 4],
-    anim: { legSwing: 0.7, armSwing: 0.6, bob: 0.25, tailSway: 0.35, headNod: 0.08, flapSpeed: 9, flap: 0.9, glide: 0, ...(o.anim ?? {}) },
+    anim: { legSwing: 0.7, armSwing: 0.6, bob: 0.25, tailSway: 0.35, headNod: 0.08, flapSpeed: 9, flap: 0.9, glide: 0, fold: { rx: 0, ry: 1.5, rz: -0.05 }, ...(o.anim ?? {}) },
     scale: o.scale ?? 1, lift: o.lift ?? 0, sprint: o.sprint ?? 0, idle: o.idle ?? [0.5, 3],
-    fly: !!o.fly, swim: !!o.swim,
+    fly: !!o.fly, swim: !!o.swim, hang: o.hang ?? 0,
   };
 }
 
@@ -188,9 +212,15 @@ function surface(g, defs, x, z, y, clear) {
 export class Actors {
   constructor(stage, o = {}) {
     this.stage = stage;
-    if (o.groups) o = { ...o, count: o.groups.reduce((n, gr) => n + (gr.count ?? 1), 0) };
+    // spots: count defaults to one agent per spot ('hop': half of them, so there are free perches to fly to)
+    const perSpots = (sp) => (o.behavior === 'hop' ? Math.max(1, Math.ceil(sp.length / 2)) : sp.length);
+    if (o.groups) o = { ...o, count: o.groups.reduce((n, gr) => n + (gr.count ?? (gr.spots?.length ? perSpots(gr.spots) : 1)), 0) };
+    else if (o.spots?.length && o.count == null) o = { ...o, count: perSpots(o.spots) };
     this.o = { count: 1, loop: true, maxStep: 1, shadow: 'auto', seed: 1, spread: 0, variants: 1, ...o };
     const R = (this.R = rng(this.o.seed));
+    // newer features (spots, hop, wobble) draw from their own stream, so R's sequence — and every older scene — is unchanged
+    this.R2 = rng(`actors:${this.o.seed}`);
+    this._claims = new Map(); // hop: spot → agent index (one bird per perch)
     const make = factoryFor(o.rig ?? o.creature);
     const optList = Array.isArray(o.options) ? o.options : null;
     const nv = Math.max(1, Math.min(optList?.length ?? this.o.variants, this.o.count));
@@ -202,18 +232,23 @@ export class Actors {
     const on = this.o.on ?? (r.swim ? 'water' : 'ground');
     this.lift = on === 'water' ? r.lift : 0;
     this.idle = this.o.idle ?? r.idle;
-    const needsGround = beh !== 'flock' && beh !== 'circle' && typeof this.o.ground !== 'number';
+    // still/hop agents that all sit on spots with an explicit y never touch the ground: skip the height field
+    const spotSets = this.o.groups ? this.o.groups.map((gr) => gr.spots) : [this.o.spots];
+    const spotted = (beh === 'still' || beh === 'hop') && spotSets.every((s) => s?.length && s.every((p) => p[1] != null));
+    const needsGround = beh !== 'flock' && beh !== 'circle' && typeof this.o.ground !== 'number' && !(spotted && (this.o.ground ?? 'auto') === 'auto');
     const src = needsGround ? groundSources(stage, this.o.ground) : [];
     const b = stage.bounds;
-    // groups: [{ area | path, count }] — one system (one draw call per part) spread over many areas or paths
-    // (stage.world merges the actors regions emit this way)
+    // groups: [{ area | path | spots, count }] — one system (one draw call per part) spread over many areas or
+    // paths (stage.world merges the actors regions emit this way)
     this.groupOf = [];
     for (const gr of this.o.groups ?? []) {
-      const g2 = { ...gr, area: gr.area ?? (gr.path ? pathBox(gr.path) : null) };
-      for (let k = 0; k < (gr.count ?? 1); k++) this.groupOf.push({ ...g2, k, n: gr.count ?? 1 });
+      const n = gr.count ?? (gr.spots?.length ? perSpots(gr.spots) : 1);
+      const g2 = { ...gr, area: gr.area ?? (gr.path ? pathBox(gr.path) : gr.spots?.length ? spotsBox(gr.spots) : null) };
+      for (let k = 0; k < n; k++) this.groupOf.push({ ...g2, k, n });
     }
     const ga = this.groupOf.map((gr) => gr.area).filter(Boolean);
     if (this.o.path && !this.o.area) ga.push(pathBox(this.o.path));
+    if (this.o.spots?.length && !this.o.area) ga.push(spotsBox(this.o.spots));
     const union = (u, a) => [[Math.min(u[0][0], a[0][0]), Math.min(u[0][1], a[0][1])], [Math.max(u[1][0], a[1][0]), Math.max(u[1][1], a[1][1])]];
     this.area = this.o.area ?? (ga?.length ? ga.reduce(union) : null) ?? areaOf(src) ?? (b.isEmpty() ? [[-16, -16], [16, 16]] : [[b.min.x, b.min.z], [b.max.x, b.max.z]]);
     this.ground = typeof this.o.ground === 'number' ? { at: () => this.o.ground, ok: () => true }
@@ -224,6 +259,7 @@ export class Actors {
 
     this.object = new THREE.Group();
     this.object.name = 'actors';
+    this.id = this.o.id ?? null; // name it; others follow it with target: 'id'
     const n = this.o.count;
     // agents are dealt round-robin to the variants; each variant has its own instanced part meshes
     this.sets = this.rigs.map((rg, v) => {
@@ -266,14 +302,21 @@ export class Actors {
     const [s0, s1] = Array.isArray(sp) ? sp : [sp, sp];
     const ag = {
       i, set: i % nv, li: Math.floor(i / nv), area, path: gr?.path ?? o.path, x: 0, y: 0, z: 0, heading: R() * Math.PI * 2, speed: 0, maxSpeed: R.range(s0, s1),
-      phase: R() * 6.28, idle: R.range(0, 1), target: null, s: R(), scale: this.scale * R.range(0.92, 1.08), u: 0, lane: R.range(-1, 1) * o.spread, state: {},
+      phase: R() * 6.28, idle: R.range(0, 1), target: null, s: R(), scale: this.scale * R.range(0.92, 1.08), u: 0, laneU: R.range(-1, 1), state: {},
     };
+    ag.lane = ag.laneU * (typeof o.spread === 'number' ? o.spread : 0);
     ag.baseSpeed = ag.maxSpeed;
-    const beh = o.behavior;
-    if (beh === 'path' && ag.path) {
+    ag.pitch = 0;
+    if (rg.fly) ag.air = 1; // 0 perched … 1 flying
+    const beh = o.behavior, spots = gr?.spots ?? o.spots, k = gr ? gr.k : i, n = gr ? gr.n : o.count;
+    let fixedY = false, perched = false;
+    if (beh === 'path' && ag.path?.length) {
       ag.u = (gr ? gr.k / gr.n : i / o.count) * this._pathLen(ag.path);
+      ag.rank = n - 1 - k; ag.u0 = ag.u; // loop: false → they queue up at the end instead of piling up
+      ag.laneYU = this.R2.range(-1, 1);
       const [x, z, hd, py] = this._pathAt(ag.path, ag.u);
-      Object.assign(ag, { x, z, heading: hd, y: py ?? this._h(x, z, 0) });
+      Object.assign(ag, { x, z, heading: hd ?? ag.heading, y: py ?? this._h(x, z, 0) });
+      fixedY = py != null;
     } else if (beh === 'circle' || beh === 'flock') {
       ag.center = gr?.center ?? o.center ?? [0, 30, 0];
       ag.radius = (gr?.radius ?? o.radius ?? 20) * R.range(0.7, 1.15); ag.alt = ag.center[1] + R.range(-4, 4); ag.ang = R() * Math.PI * 2; ag.dir = beh === 'flock' ? 1 : R.sign();
@@ -283,6 +326,21 @@ export class Actors {
       const gap = this._gap() * (i + 1);
       ag.x = tx - Math.sin(ag.heading) * gap; ag.z = tz - Math.cos(ag.heading) * gap;
       ag.y = this._h(ag.x, ag.z, 0);
+    } else if (spots?.length) {
+      // explicit placement: spots[k % n] = [x, y, z, headingDeg?] (y exact; null = on the ground)
+      const sp = (ag.spot = spots[k % spots.length]);
+      ag.spots = spots;
+      ag.x = sp[0]; ag.z = sp[2];
+      fixedY = sp[1] != null;
+      ag.y = fixedY ? sp[1] : this._h(ag.x, ag.z, 0);
+      if (sp[3] != null) ag.heading = sp[3] * DEG;
+      perched = beh === 'still' || beh === 'hop';
+      if (beh === 'hop') {
+        ag.hop = { mode: 'perch', wait: this.R2.range(0.2, Math.max(0.3, this.idle[1])) };
+        if (!this._claims.has(sp)) this._claims.set(sp, i);
+      }
+      const g = this.ground; // wandering from a spot: stay in the spot's own connected area (a roof, a sandbar…)
+      if (beh === 'wander' && g && !rg.fly && o.region !== 'any') ag.region = g.region(ag.x, ag.z) || this._mainRegion(area);
     } else {
       const g = this.ground;
       if (g && !rg.fly && o.region !== 'any') ag.region = this._mainRegion(area);
@@ -292,7 +350,10 @@ export class Actors {
       }
       ag.y = this._h(ag.x, ag.z, 0);
     }
-    if (rg.fly && beh !== 'flock' && beh !== 'circle') { const al = o.altitude ?? [3, 8]; ag.alt = R.range(al[0], al[1]); ag.y += ag.alt; }
+    if (rg.fly && beh !== 'flock' && beh !== 'circle') { const al = o.altitude ?? [3, 8]; ag.alt = R.range(al[0], al[1]); if (!fixedY && !perched) ag.y += ag.alt; }
+    if (perched) ag.air = 0;
+    ag.fixed = fixedY; // y is explicit (3D path / spot): no ground snapping
+    ag.hang = rg.hang > 0 && (fixedY || perched); // y is the rig's anchor (a gibbon's grip, a sitter's seat)
     return ag;
   }
 
@@ -311,8 +372,13 @@ export class Actors {
   _h(x, z, fallback) { const h = this.ground?.at(x, z); return h == null || h === -Infinity ? fallback : h; }
   _gap() { return this.o.spacing ?? Math.max(1.5, this.rig.size[2] * this.scale * 1.15); }
   _targetPos(t) {
-    const tg = this.o.target;
+    let tg = this.o.target;
     if (!tg) return null;
+    if (typeof tg === 'string') { // another system's id (plain data: works from stage.world region emits)
+      if (!this._tgSys || this._tgSys.id !== tg) this._tgSys = (this.stage.actorSystems ?? []).find((a) => a !== this && a.id === tg) ?? null;
+      tg = this._tgSys;
+      if (!tg?.agents.length) return null;
+    }
     if (typeof tg === 'function') return tg(t);
     if (Array.isArray(tg)) return tg;
     if (tg instanceof Actors) return [tg.agents[0].x, tg.agents[0].z];
@@ -320,28 +386,41 @@ export class Actors {
     return [tg.x, tg.z];
   }
 
+  // loop: true (default) = closed polyline; false = open, walked once; 'restart' = open, wraps to the start
+  _closed() { return this.o.loop !== false && this.o.loop !== 'restart'; }
   _pathLen(p) {
     this._plen ??= new Map();
     if (this._plen.has(p)) return this._plen.get(p);
     let L = 0;
-    for (let i = 0; i < p.length - (this.o.loop ? 0 : 1); i++) { const a = p[i], b = p[(i + 1) % p.length]; L += Math.hypot(b[0] - a[0], zOf(b) - zOf(a)); }
+    for (let i = 0; i < p.length - (this._closed() ? 0 : 1); i++) L += segLen(p[i], p[(i + 1) % p.length]);
     this._plen.set(p, L);
     return L;
   }
+  /** Point at arc length u → [x, z, heading | null (vertical/zero segment), y | null (2D path), pitch]. */
   _pathAt(p, u) {
-    const L = this._pathLen(p), loop = this.o.loop;
-    let d = loop ? ((u % L) + L) % L : Math.min(Math.max(u, 0), L);
-    const segs = p.length - (loop ? 0 : 1);
+    const L = this._pathLen(p), closed = this._closed();
+    const y0 = p[0].length > 2 ? p[0][1] : null;
+    if (!(L > 0)) return [p[0][0], zOf(p[0]), null, y0, 0]; // one point / zero-length path: stand there
+    let d = closed || this.o.loop === 'restart' ? ((u % L) + L) % L : Math.min(Math.max(u, 0), L);
+    const segs = p.length - (closed ? 0 : 1);
     for (let i = 0; i < segs; i++) {
       const a = p[i], b = p[(i + 1) % p.length];
-      const s = Math.hypot(b[0] - a[0], zOf(b) - zOf(a));
+      const s = segLen(a, b);
       if (d <= s || i === segs - 1) {
-        const t = s ? Math.min(1, d / s) : 0;
-        return [a[0] + (b[0] - a[0]) * t, zOf(a) + (zOf(b) - zOf(a)) * t, Math.atan2(b[0] - a[0], zOf(b) - zOf(a)), a.length > 2 ? a[1] + (b[1] - a[1]) * t : null];
+        const t = s ? Math.min(1, d / s) : 0, dx = b[0] - a[0], dz = zOf(b) - zOf(a);
+        const y3 = a.length > 2 && b.length > 2;
+        return [a[0] + dx * t, zOf(a) + dz * t, dx || dz ? Math.atan2(dx, dz) : null,
+          a.length > 2 ? a[1] + ((b.length > 2 ? b[1] : a[1]) - a[1]) * t : null, y3 ? Math.atan2(b[1] - a[1], Math.hypot(dx, dz)) : 0];
       }
       d -= s;
     }
-    return [p[0][0], zOf(p[0]), 0, null];
+    return [p[0][0], zOf(p[0]), null, y0, 0];
+  }
+  _spreadAt(ag) {
+    const sp = this.o.spread;
+    if (!Array.isArray(sp)) return ag.lane;
+    const L = this._pathLen(ag.path), f = L > 0 ? (((ag.u % L) + L) % L) / L : 0;
+    return ag.laneU * (sp[0] + (sp[1] - sp[0]) * (this.o.loop === false && L > 0 ? Math.min(1, ag.u / L) : f));
   }
 
   _step(ag, dt, t) {
@@ -349,12 +428,31 @@ export class Actors {
     const beh = o.behavior;
     if (typeof beh === 'function') { beh(ag, dt, t, this); return; }
     if (beh === 'still') { ag.speed = 0; return; }
+    if (beh === 'hop') { this._hop(ag, dt, t); return; }
     if (beh === 'path') {
-      ag.speed = ag.maxSpeed; ag.u += ag.speed * dt;
-      const [x, z, hd, py] = this._pathAt(ag.path, ag.u);
-      ag.heading = turn(ag.heading, hd, dt * 8);
-      ag.x = x + Math.cos(hd) * ag.lane; ag.z = z - Math.sin(hd) * ag.lane;
-      ag.y = py ?? damp(ag.y, this._h(ag.x, ag.z, ag.y), dt * 12);
+      if (!ag.path?.length) { ag.speed = 0; return; }
+      if (o.loop === false) { // walk once, then stand queued behind the ones ahead
+        const end = Math.max(ag.u0, this._pathLen(ag.path) - ag.rank * this._gap());
+        ag.speed = ag.u < end ? ag.maxSpeed : 0;
+        ag.u = Math.min(ag.u + ag.speed * dt, end);
+      } else {
+        ag.speed = ag.maxSpeed; ag.u += ag.speed * dt;
+        if (o.loop === 'restart') { const L = this._pathLen(ag.path); if (ag.u > L) ag.u -= L; }
+      }
+      const [x, z, hd, py, pitch] = this._pathAt(ag.path, ag.u);
+      const h = hd ?? ag.heading; // straight up/down: keep facing where it was going
+      if (hd != null) ag.heading = turn(ag.heading, hd, dt * 8);
+      const lane = this._spreadAt(ag);
+      let wl = 0, wy = 0;
+      if (o.wobble) { const w = o.wobble, s = ag.s * 40; wl = (Math.sin(t * 2.3 + s) * 0.6 + Math.sin(t * 5.3 + s * 1.7) * 0.4) * w; wy = (Math.sin(t * 3.1 + s * 2.3) * 0.6 + Math.sin(t * 7.7 + s * 0.7) * 0.4) * w * 0.6; }
+      ag.x = x + Math.cos(h) * (lane + wl); ag.z = z - Math.sin(h) * (lane + wl);
+      if (py != null) { // 3D path: y is exact (fliers also spread vertically and pitch along it)
+        ag.fixed = true; ag.hang = rg.hang > 0;
+        ag.y = py + (rg.fly ? ag.laneYU * Math.abs(lane) * 0.5 + wy : 0);
+        if (rg.fly) ag.pitch = damp(ag.pitch, Math.max(-1.1, Math.min(1.1, pitch)), dt * 6);
+      } else if (rg.fly) ag.y = damp(ag.y, Math.max(this._h(ag.x, ag.z, 0), 0) + ag.alt + wy, dt * 3); // hover above a 2D path
+      else ag.y = damp(ag.y, this._h(ag.x, ag.z, ag.y), dt * 12);
+      if (o.loop === 'restart') { const L = this._pathLen(ag.path); ag.vis = L > 4 ? Math.min(1, ag.u / 2, (L - ag.u) / 2) : 1; } // fade in/out at the ends
       return;
     }
     if (beh === 'circle' || beh === 'flock') {
@@ -364,6 +462,7 @@ export class Actors {
       const wob = Math.sin(t * 0.7 + ag.s * 20) * (beh === 'flock' ? 3 : 0.5);
       ag.x = c[0] + Math.cos(ag.ang) * (ag.radius + wob); ag.z = c[2] + Math.sin(ag.ang) * (ag.radius + wob);
       ag.y = ag.alt + Math.sin(t * 1.3 + ag.s * 9) * 1.5;
+      if (o.wobble) { const w = o.wobble, q = ag.s * 40; ag.x += Math.sin(t * 2.9 + q) * w * 0.7; ag.z += Math.sin(t * 3.7 + q * 1.3) * w * 0.7; ag.y += Math.sin(t * 4.3 + q * 0.7) * w * 0.5; } // erratic (bats)
       ag.heading = Math.atan2(-Math.sin(ag.ang) * ag.dir, Math.cos(ag.ang) * ag.dir);
       return;
     }
@@ -395,6 +494,67 @@ export class Actors {
     if (!this._move(ag, dt, !rg.fly, t)) { ag.target = null; ag.heading += Math.PI * R.range(0.5, 1.5); }
   }
 
+  // 'hop': perch at a spot for `idle` s, turn, fly a smooth arc to another free spot of the same set, land.
+  _hop(ag, dt, t) {
+    const h = ag.hop, rg = this.rigs[ag.set], R = this.R2;
+    if (!h) { ag.speed = 0; return; } // no spots: behaves like 'still'
+    if (h.mode === 'perch') {
+      ag.speed = 0;
+      ag.air = damp(ag.air, 0, dt * 7); ag.pitch = damp(ag.pitch, 0, dt * 7);
+      const sp = ag.spot;
+      if (sp?.[3] != null) ag.heading = turn(ag.heading, sp[3] * DEG, dt * 3);
+      if ((h.wait -= dt) > 0) return;
+      const to = this._nextSpot(ag);
+      if (!to) { h.wait = R.range(0.5, 1.5); return; }
+      Object.assign(h, { mode: 'turn', to, from: [ag.x, ag.y, ag.z] });
+      return;
+    }
+    const to = h.to;
+    const tx = to.x - h.from[0], tz = to.z - h.from[2], D = Math.hypot(tx, tz);
+    if (h.mode === 'turn') { // face the next perch, then take off (in the air: hover while turning)
+      const want = D > 0.01 ? Math.atan2(tx, tz) : ag.heading;
+      ag.heading = turn(ag.heading, want, dt * 9);
+      ag.speed = 0;
+      ag.air = damp(ag.air, h.airborne ? 1 : 0.4, dt * 6);
+      if (Math.abs(angleDiff(ag.heading, want)) > 0.2) return;
+      const arc = (this.o.arc ?? 0.25) * D, dy = to.y - h.from[1];
+      Object.assign(h, { mode: 'fly', s: 0, arc: arc > 0 ? Math.max(0.8, arc) : arc, dur: Math.max(0.35, (Math.hypot(D, dy) + Math.abs(arc) * 0.6) / ag.maxSpeed) });
+    }
+    // fly: eased straight line + a sine arc on top; wings flap (air → 1), pitch follows the climb
+    h.s = Math.min(1, h.s + dt / h.dur);
+    const s = h.s, e = s - Math.sin(2 * Math.PI * s) / (2 * Math.PI) * 0.7, de = 1 - Math.cos(2 * Math.PI * s) * 0.7;
+    const dy = to.y - h.from[1], bump = Math.sin(Math.PI * s);
+    let wl = 0, wy = 0;
+    if (this.o.wobble) { const w = this.o.wobble * bump, q = ag.s * 40; wl = (Math.sin(t * 2.3 + q) * 0.6 + Math.sin(t * 5.3 + q * 1.7) * 0.4) * w; wy = Math.sin(t * 3.1 + q * 2.3) * w * 0.5; }
+    const hd = D > 0.01 ? Math.atan2(tx, tz) : ag.heading;
+    ag.x = h.from[0] + tx * e + Math.cos(hd) * wl; ag.z = h.from[2] + tz * e - Math.sin(hd) * wl;
+    ag.y = h.from[1] + dy * e + h.arc * bump + wy;
+    const vh = (D * de) / h.dur, vy = (dy * de + h.arc * Math.PI * Math.cos(Math.PI * s)) / h.dur;
+    ag.speed = Math.hypot(vh, vy);
+    ag.air = damp(ag.air, 1, dt * 12);
+    if (D > 0.01) ag.heading = turn(ag.heading, hd, dt * 10);
+    if (rg.fly) ag.pitch = damp(ag.pitch, Math.max(-0.7, Math.min(0.7, Math.atan2(vy, Math.max(vh, 0.5)))) * Math.min(1, (1 - s) * 4), dt * 8); // level out to land
+    if (s < 1) return;
+    if (to.sally) { Object.assign(h, { mode: 'turn', airborne: true, from: [ag.x, ag.y, ag.z], to: to.back }); return; }
+    ag.x = to.x; ag.y = to.y; ag.z = to.z; ag.spot = to.spot;
+    Object.assign(h, { mode: 'perch', to: null, airborne: false, wait: R.range(this.idle[0], this.idle[1]) });
+  }
+  // the next perch for a hopper: a random free spot of its own set (one spot: a short sally out and back)
+  _nextSpot(ag) {
+    const R = this.R2, spots = ag.spots, cur = ag.spot;
+    const at = (sp) => ({ x: sp[0], y: sp[1] ?? this._h(sp[0], sp[2], ag.y), z: sp[2], spot: sp });
+    if (spots.length === 1) {
+      const a = R() * Math.PI * 2, d = R.range(3, 7);
+      return { x: ag.x + Math.sin(a) * d, y: ag.y + R.range(-1.5, 1.5), z: ag.z + Math.cos(a) * d, sally: true, back: at(cur) };
+    }
+    const free = spots.filter((sp) => sp !== cur && (this._claims.get(sp) ?? ag.i) === ag.i);
+    if (!free.length) return null;
+    const sp = R.pick(free);
+    if (this._claims.get(cur) === ag.i) this._claims.delete(cur);
+    this._claims.set(sp, ag.i);
+    return at(sp);
+  }
+
   // move along heading; blocked by cliffs/water/walls → false
   _move(ag, dt, block, t) {
     const g = this.ground;
@@ -419,6 +579,21 @@ export class Actors {
     }
   }
 
+  /** Could any agent be in view (frustum, world space)? Systems casting real sun shadows always are (their
+   *  shadow can fall into view from outside). */
+  inView(frustum) {
+    if (!this.object.visible || this.sets.some((s) => s.mesh.castShadow)) return true;
+    let x0 = Infinity, y0 = Infinity, z0 = Infinity, x1 = -Infinity, y1 = -Infinity, z1 = -Infinity;
+    for (const ag of this.agents) {
+      if (ag.x < x0) x0 = ag.x; if (ag.x > x1) x1 = ag.x;
+      if (ag.y < y0) y0 = ag.y; if (ag.y > y1) y1 = ag.y;
+      if (ag.z < z0) z0 = ag.z; if (ag.z > z1) z1 = ag.z;
+    }
+    const pad = (this._reach ??= Math.max(...this.rigs.map((r) => Math.max(...r.size))) + 2) * this.scale * 1.2 + 1;
+    _box.min.set(x0 - pad, y0 - pad, z0 - pad); _box.max.set(x1 + pad, y1 + pad, z1 + pad);
+    return frustum.intersectsBox(_box);
+  }
+
   /** Write instance matrices for time t. */
   pose(t) {
     for (const ag of this.agents) this._pose(ag, t);
@@ -431,15 +606,20 @@ export class Actors {
     const moving = Math.min(1, ag.speed / Math.max(ag.baseSpeed * 0.5, 0.01));
     const sw = Math.sin(ag.phase);
     const bob = r.fly ? 0 : r.swim ? Math.sin(t * 2 + ag.s * 9) * 0.08 : Math.abs(sw) * A.bob * moving;
-    _m.compose(_v.set(ag.x, ag.y + (this.lift + bob) * ag.scale, ag.z), _q.setFromAxisAngle(_y, ag.heading), _s.setScalar(ag.scale));
+    const sc = ag.vis == null ? ag.scale : ag.scale * Math.max(0.001, ag.vis);
+    _q.setFromAxisAngle(_y, ag.heading);
+    if (ag.pitch) _q.multiply(_q2.setFromAxisAngle(_x, -ag.pitch)); // nose up = positive pitch
+    _m.compose(_v.set(ag.x, ag.y + (this.lift + bob) * sc - (ag.hang ? r.hang * sc : 0), ag.z), _q, _s.setScalar(sc));
     _m.multiply(_t.makeTranslation(-c[0], 0, -c[2]));
     set.mesh.setMatrixAt(ag.li, _m);
     const D = set.rigTex.image.data, base = ag.li * set.stride * 4;
     const flap = r.fly ? Math.sin(t * A.flapSpeed + ag.s * 6) * (A.glide ? Math.max(0, Math.sin(t * 0.8 + ag.s * 13) * (1 + A.glide) - A.glide) : 1) : 0;
+    const air = ag.air ?? 1, F = A.fold ?? {};
     for (let pi = 0; pi < r.parts.length; pi++) {
       const part = r.parts[pi];
-      let rx = 0, ry = 0, rz = 0;
       const role = part.role ?? 'static', side = part.side ?? 1;
+      if (role === 'static' && !part.animate && ag.posed) continue; // identity, written on the first pose
+      let rx = 0, ry = 0, rz = 0, dx = 0, dy = 0, dz = 0;
       if (role === 'leg') rx = sw * A.legSwing * moving * (part.pair ? -1 : 1) * side;
       else if (role === 'arm') rx = -sw * A.armSwing * moving * side;
       else if (role === 'tail') { ry = Math.sin(t * (A.tailSpeed ?? 2.2) + ag.s * 10) * A.tailSway * (1 - 0.4 * moving); rx = (A.tailLift ?? -0.15) * moving; }
@@ -447,25 +627,45 @@ export class Actors {
         rx = Math.sin(ag.phase * 2) * A.headNod * moving + (A.graze ?? 0) * (1 - moving) * (0.75 + 0.25 * Math.sin(t * 0.9 + ag.s * 5));
         ry = (1 - moving) * Math.sin(t * 0.6 + ag.s * 30) * 0.5 * (A.graze ? 0.4 : 1);
       }
-      else if (role === 'wing') rz = flap * A.flap * side;
+      else if (role === 'wing') {
+        if (air >= 1) rz = flap * A.flap * side;
+        else { const k = 1 - air; rz = (flap * A.flap * air + (F.rz ?? 0) * k) * side; ry = (F.ry ?? 0) * k * side; rx = (F.rx ?? 0) * k; } // perched: folded
+      }
       else if (role === 'fin') ry = Math.sin(t * 6 + ag.s * 6) * 0.4 * (0.4 + 0.6 * moving);
-      if (part.animate) ({ rx = rx, ry = ry, rz = rz } = part.animate({ t, agent: ag, moving, phase: ag.phase, rx, ry, rz }) ?? {});
-      if (rx || ry || rz) {
-        // rotate about the pivot: R with translation pv - R·pv
-        const pv = part.pivot ?? [0, 0, 0];
-        _r.makeRotationFromEuler(_e.set(rx, ry, rz));
-        _v.set(pv[0], pv[1], pv[2]).applyMatrix4(_r);
-        _r.setPosition(pv[0] - _v.x, pv[1] - _v.y, pv[2] - _v.z);
-      } else _r.identity();
+      let mat = null;
+      if (part.animate) ({ rx = rx, ry = ry, rz = rz, dx = 0, dy = 0, dz = 0, matrix: mat = null } = part.animate({ t, agent: ag, moving, phase: ag.phase, air: ag.air ?? (r.fly ? 1 : 0), hang: !!ag.hang, flap, rx, ry, rz }) ?? {});
       // rows of the rig-space part matrix → 3 texels (the vertex shader rebuilds it, see material.js RIG_PARS)
-      const e = _r.elements, o = base + pi * 12;
-      D[o] = e[0]; D[o + 1] = e[4]; D[o + 2] = e[8]; D[o + 3] = e[12];
-      D[o + 4] = e[1]; D[o + 5] = e[5]; D[o + 6] = e[9]; D[o + 7] = e[13];
-      D[o + 8] = e[2]; D[o + 9] = e[6]; D[o + 10] = e[10]; D[o + 11] = e[14];
+      const o = base + pi * 12;
+      if (mat) { // a full rig-space transform (Matrix4) — chains of joints, see gen/canopy.js gibbon
+        const e = mat.elements;
+        D[o] = e[0]; D[o + 1] = e[4]; D[o + 2] = e[8]; D[o + 3] = e[12];
+        D[o + 4] = e[1]; D[o + 5] = e[5]; D[o + 6] = e[9]; D[o + 7] = e[13];
+        D[o + 8] = e[2]; D[o + 9] = e[6]; D[o + 10] = e[10]; D[o + 11] = e[14];
+      } else if (rx || ry || rz) {
+        // rotate about the pivot: R (Euler XYZ, as THREE.Matrix4.makeRotationFromEuler) with translation pv − R·pv + d
+        const a = Math.cos(rx), b = Math.sin(rx), cy = Math.cos(ry), d = Math.sin(ry), e = Math.cos(rz), f = Math.sin(rz);
+        const ae = a * e, af = a * f, be = b * e, bf = b * f;
+        const m00 = cy * e, m01 = -cy * f, m02 = d, m10 = af + be * d, m11 = ae - bf * d, m12 = -b * cy, m20 = bf - ae * d, m21 = be + af * d, m22 = a * cy;
+        const pv = part.pivot, px = pv ? pv[0] : 0, py = pv ? pv[1] : 0, pz = pv ? pv[2] : 0;
+        D[o] = m00; D[o + 1] = m01; D[o + 2] = m02; D[o + 3] = px - (m00 * px + m01 * py + m02 * pz) + dx;
+        D[o + 4] = m10; D[o + 5] = m11; D[o + 6] = m12; D[o + 7] = py - (m10 * px + m11 * py + m12 * pz) + dy;
+        D[o + 8] = m20; D[o + 9] = m21; D[o + 10] = m22; D[o + 11] = pz - (m20 * px + m21 * py + m22 * pz) + dz;
+      } else {
+        D[o] = 1; D[o + 1] = 0; D[o + 2] = 0; D[o + 3] = dx;
+        D[o + 4] = 0; D[o + 5] = 1; D[o + 6] = 0; D[o + 7] = dy;
+        D[o + 8] = 0; D[o + 9] = 0; D[o + 10] = 1; D[o + 11] = dz;
+      }
     }
+    ag.posed = true;
     if (this.blob) {
       const w = Math.max(r.size[0], r.size[2] * 0.7) * ag.scale * 0.75;
-      _o.compose(_v.set(ag.x, (this.ground ? this._h(ag.x, ag.z, ag.y) : ag.y) + 0.04, ag.z), _q.setFromAxisAngle(_y, ag.heading), _s.set(w * (r.size[0] / Math.max(r.size[0], r.size[2])) + 0.4, 1, r.size[2] * ag.scale * 0.6 + 0.4));
+      let by = this.ground ? this._h(ag.x, ag.z, ag.y) : ag.y, k = 1;
+      if (ag.fixed) { // explicit y (branch, 3D path): a contact blob only when the feet are on what's below
+        const feet = ag.y - (ag.hang ? r.hang * sc : 0);
+        if (!this.ground) by = feet;
+        if ((ag.hang && !this.ground) || Math.abs(feet - by) > 2.5 || (ag.air ?? 0) > 0.5) k = 0;
+      }
+      _o.compose(_v.set(ag.x, by + 0.04, ag.z), _q.setFromAxisAngle(_y, ag.heading), _s.set((w * (r.size[0] / Math.max(r.size[0], r.size[2])) + 0.4) * k, 1, (r.size[2] * ag.scale * 0.6 + 0.4) * k));
       this.blob.setMatrixAt(ag.i, _o);
     }
   }
@@ -526,7 +726,17 @@ function pathBox(p) {
   const xs = p.map((q) => q[0]), zs = p.map(zOf);
   return [[Math.min(...xs) - 3, Math.min(...zs) - 3], [Math.max(...xs) + 3, Math.max(...zs) + 3]];
 }
+function spotsBox(s) {
+  const xs = s.map((q) => q[0]), zs = s.map((q) => q[2]);
+  return [[Math.min(...xs) - 3, Math.min(...zs) - 3], [Math.max(...xs) + 3, Math.max(...zs) + 3]];
+}
+// path segment length: 3D when both ends have a y (climbs and drops count), else horizontal
+function segLen(a, b) {
+  const dy = a.length > 2 && b.length > 2 ? b[1] - a[1] : 0;
+  return dy ? Math.hypot(b[0] - a[0], zOf(b) - zOf(a), dy) : Math.hypot(b[0] - a[0], zOf(b) - zOf(a));
+}
 const damp = (a, b, k) => a + (b - a) * Math.min(1, k);
+const angleDiff = (a, b) => ((b - a + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
 function turn(a, b, k) {
   const d = ((b - a + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
   return a + d * Math.min(1, k);

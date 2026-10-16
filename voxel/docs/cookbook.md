@@ -163,6 +163,23 @@ const { grid } = await loadVox('./model.vox', { materials: { 9: { emissive: 4, l
 stage.add(grid);             // or g.stamp(grid, x, y, z) to merge into a scene
 ```
 
+### Tropical rainforest, karsts and lake villages (static/voxel/khao_sok/)
+Palette `{ ...NATURE, ...BUILD, ...JUNGLE, ...UNDERSTORY, ...KARST, ...THAI }`. Order matters:
+```js
+// terrain + water first, then the forest (it plants on any non-water top: build houses after it or `avoid` them)
+rainforest(g, [x0, z0], [x1, z1], { on: ['floor'], avoid: [[[cx0, cz0], [cx1, cz1]]], emergents: [[x, z]], border: false });
+dipterocarp(g, [x, y, z], { height: 70 });             // hero emergent: explicit position toward −x/−z of a clearing
+rafflesia(g, p); fallenLog(g, a, b);                     // hero plants and logs (these overwrite)
+undergrowth(g, [x0, z0], [x1, z1], { on: ['floor'], avoid: heroSpots });   // ferns, alocasia, seedlings…
+epiphytes(g, { area: treeBox }); lianas(g, tree.tips);  // last: orchids/moss on branches, vines from branch tips
+const k = karst(g, [x, bedY, z], { height: 90, radius: 18, water: 0, leaves: ['jungleLeafDark', 'jungleLeaf', 'jungleLeafLight', 'jungleLeafSun'], trunk: 'barkPale' });
+cave(g, k.faces['+x'], { dir: '+x', width: 10, height: 12, glow: true });
+const r = raftHouse(g, [x, 0, z]); longtail(g, r.mooring, { dir: r.mooringDir }); person(g, r.bench, { pose: 'sit', side: r.benchSide });
+```
+Mix a slim leaning `tower`, a `dome` and a 2–3-peak `massif` for variety; use `border: false` where a forest meets
+the neighbouring region's forest. Bendy creature parts (trunks, tails, snakes) are chains of rigid segments with far
+pivots (`slideYaw` / `slidePitch` in wildlife.js). Boats that cruise: `stage.actors({ creature: 'longtailBoat', on: 'water', behavior: 'path', path })`.
+
 ## Performance
 
 - Greedy meshing makes flat areas nearly free; noise/jitter don't affect quad count (computed in the

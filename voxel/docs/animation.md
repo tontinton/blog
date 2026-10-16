@@ -10,7 +10,7 @@ Four tools, from cheapest to most alive:
 | creatures that walk around (cats, people, birds, ducks, fish) | `stage.actors({ creature, count, behavior })` |
 
 Everything is driven by the stage clock: `?t=3` (and shot mode) freezes it, so screenshots are
-deterministic. Actors are re-simulated from spawn to `t` in lockstep at 30 Hz when the clock is frozen.
+deterministic. Actors are re-simulated from spawn to `t` in lockstep at 30 Hz when the clock is frozen. (The replay is capped at 1800 steps: `?t=` above 60 s shows t = 60.)
 
 ## Moving parts: `stage.animate`
 
@@ -51,20 +51,70 @@ Worked example: `voxel/lab/cat.js` (farmyard with all of the above + windmill). 
 siamese`), `dog` (`golden brown black spotted white`, `size: small|medium|big`), `fox`, `sheep`
 (grazes), `pig`, `walker` (person: `skin shirt pants hair hat height`), `bird`, `butterfly`, `duck`
 (`baby`, `kind: 'white'`), `fish` (`color color2 depth`). Every one takes `seed` and `scale`.
+**Canopy & sky** (`lib/gen/canopy.js`): `gibbon` (brachiates on 3D paths; `coat: black|buff`, `pose: hang|sit`),
+`langur` (sits on spots, tail dangling; `pose: walk`), `hornbill` (perches/hops, slow flaps + glides),
+`kingfisher` (hops between perches), `bat` (`kind: cave|fox`; streams on paths, hangs on spots), `birdwing`
+(`kind: golden|rajah`), `dragonfly` (`color: blue|red`; darts over water).
 
 **Behaviors**
 
 | behavior | does | key options |
 |---|---|---|
 | `'wander'` (default on the ground) | picks reachable targets, walks/sprints there, idles; stays in the largest connected walkable region of `area` (streets, not rooftops) | `area`, `idle: [min,max]`, `sprint`, `speed`, `maxStep`, `region: 'any'` |
-| `'path'` | walks a polyline, agents spaced evenly along it; `loop: true` (default) closes it (two points = back and forth), `loop: false` walks it once and stops | `path: [[x,z] \| [x,y,z], …]`, `loop`, `spread` (lane jitter) |
-| `'follow'` | a chain: agent 0 follows `target`, each next one follows the previous | `target` (Actors, agent, Object3D, `[x,z]`, `t => [x,z]`), `spacing` |
-| `'circle'` / `'flock'` (default for flyers) | circles `center` at its altitude (flock: one direction, wobbly) | `center: [x,y,z]`, `radius` |
-| `'still'` | stands (idle animation only: head looks around, tail sways) | |
-| `(ag, dt, t, actors) => {}` | your own: set `ag.x/y/z/heading/speed` | `actors.ground.at/ok/region` |
+| `'path'` | walks a polyline, agents spaced evenly along it. 2D points follow the ground; **3D points `[x, y, z]` set y exactly** (branches, bridges, the air — fliers pitch along climbs; distances are 3D). `loop: true` (default) closes it with a STRAIGHT segment from the last point back to the first (two points = back and forth; on narrow routes — trails, bridges — list the points out and back, `[...pts, ...pts.slice(1, -1).reverse()]`, so nobody cuts across roofs or through the air); `loop: false` walks it once, then they stand queued at the end; `loop: 'restart'` walks the open path and jumps back to the start (streams — they grow in / shrink out over the first and last 2 voxels) | `path: [[x,z] \| [x,y,z], …]`, `loop`, `spread` (lane jitter; `[start, end]` widens along the path), `wobble` (voxels of erratic sway) |
+| `'follow'` | a chain: agent 0 follows `target`, each next one follows the previous | `target` (Actors, agent, Object3D, `[x,z]`, `t => [x,z]`, or `'id'` = the system created with that `id`), `spacing` |
+| `'circle'` / `'flock'` (default for flyers) | circles `center` at its altitude (flock: one direction, wobbly) | `center: [x,y,z]`, `radius`, `wobble` |
+| `'still'` | stays put: idle animation only (head looks around, tail sways; fliers on spots perch with folded wings) | `spots` |
+| `'hop'` | perches on a spot for `idle` s, turns, flies a smooth arc to a free spot of its own set, lands and folds its wings (one spot: a short sally out and back). Also works for leapers | `spots`, `arc` (0.25 × distance; negative dips), `idle`, `speed`, `wobble` |
+| `(ag, dt, t, actors) => {}` | your own: set `ag.x/y/z/heading/speed` (+ `pitch`, `air`) | `actors.ground.at/ok/region` |
 
-Fliers with `'wander'` hover `altitude: [min,max]` above the ground. `on: 'water'` makes the walkable
+Fliers with `'wander'` (or a 2D path) hover `altitude: [min,max]` above the ground. `on: 'water'` makes the walkable
 surface water (ducks, fish, boats); swimmers float with their rig's `lift`.
+
+**Explicit placements: `spots`.** `spots: [[x, y, z, headingDeg?], …]` — agent i starts at `spots[i % n]`;
+`count` defaults to one per spot (`'hop'`: half of them, so there are free perches to fly to). `y` is exact
+(no ground snapping: a branch top, a rock in a river, a ledge); `null` = on the top surface — careful: under a
+tree that is the CANOPY, so give forest-floor animals an exact y. Heading in degrees,
+0 = facing +z, 90 = facing +x (same as `rotation`); omitted = random. With `'still'`/`'hop'` and every `y`
+given, no height field is sampled at all. Spots also seed `'wander'` (start there, wander that spot's own
+connected area). In `stage.world()`, emits that differ only in `spots` (and count/seed/area/path/center/
+radius) merge into one system; each emit keeps its own spot set, so hoppers stay among their own region's perches.
+
+**What y means for anchored rigs** (`rig({ hang })`). Where y is explicit (a spot, a 3D path) it is the rig's
+anchor: the feet for most creatures; for `gibbon` the **hand-hold line** — the underside of the branch it swings
+under (the rig hangs ~7.5 voxels below it); for sitters whose tail or arms dangle (`langur`, `gibbon` with
+`pose: 'sit'`) the **seat** — the branch top. `bat`s on spots hang head-down from y (a cave ceiling, a branch underside).
+
+```js
+// langurs sitting on a branch (y = its top), each facing its own way; a gibbon resting under it by one arm
+stage.actors({ creature: 'langur', behavior: 'still', spots: [[12.5, 31, -4.5, 90], [15.5, 31, -4.5, 200], [18, 29, -3, 120]] });
+stage.actors({ creature: 'gibbon', behavior: 'still', spots: [[20.5, 30, -4.5, 90]] });
+// an elephant standing in the river (y = the river bed: no snapping), a tiger lying in wait in the grass
+stage.actors({ creature: 'elephant', behavior: 'still', spots: [[40.5, -1, 18.5, 135]] });
+stage.actors({ creature: 'tiger', behavior: 'still', spots: [[-22, null, 30, 60]] });
+// a kingfisher darting low between river perches; hornbills flying from tree top to tree top
+stage.actors({ creature: 'kingfisher', behavior: 'hop', spots: [[3.5, 4, 8.5], [12.5, 3, 7.5], [9.5, 5, 15.5]], arc: -0.15 });
+stage.actors({ creature: 'hornbill', count: 2, behavior: 'hop', spots: treeTops, arc: 0.3, idle: [3, 8] });
+// gibbons brachiating along a canopy route: y = just under the branches, hand over hand
+stage.actors({ creature: 'gibbon', count: 3, variants: 2, behavior: 'path', path: [[-20, 42, 0], [-6, 44, 3], [8, 41, 1], [20, 43, -4], [8, 45, -9]] });
+// bats streaming out of a cave mouth, climbing and dispersing over the forest, endlessly
+stage.actors({ creature: 'bat', count: 30, behavior: 'path', loop: 'restart', spread: [0.4, 8], wobble: 1,
+  path: [[-29, 4, 16], [-24, 5, 16], [-16, 10, 13], [-4, 18, 8], [12, 30, 0], [40, 45, -14]] });
+// a boat cruising a loop on the lake (2D path on water; any one-part rig with swim: true)
+stage.actors({ creature: 'canoe', on: 'water', behavior: 'path', path: [[0, 40], [30, 25], [55, 40], [30, 60]] });
+// families linked by id (plain data — also from stage.world region emits): a sow and her piglets,
+// an elephant mother and calf, an otter family swimming in line
+stage.actors({ id: 'sow1', creature: 'boar', area: [[10, 10], [40, 30]] });
+stage.actors({ creature: 'boar', options: { baby: true }, count: 4, behavior: 'follow', target: 'sow1' });
+stage.actors({ id: 'mum', creature: 'elephant', area: riverbank });
+stage.actors({ creature: 'elephant', options: { baby: true }, behavior: 'follow', target: 'mum' });
+stage.actors({ id: 'otters', creature: 'otter', on: 'water', area: pool });
+stage.actors({ creature: 'otter', count: 3, behavior: 'follow', target: 'otters', on: 'water', spacing: 1.5 });
+```
+`id`s must be unique; a follower may be created before its leader (resolved when it first steps).
+Worked example of all of these: `voxel/lab/canopy_test.js` (`&solo=gibbon` etc. = a studio for one creature);
+world merging: `voxel/lab/canopy_world.js`. Hop gotchas: flights are straight eased arcs — give perches a clear
+line of sight (raise `arc` to clear foliage); a dipping `arc` below the perches can touch water.
 
 **Ground.** Actors read the voxels of every model (`ground: 'auto'`; or pass a grid/group/number) once
 at creation into a height field: they step up/down at most `maxStep` (1), treat water as a wall (unless
@@ -88,7 +138,7 @@ per part: measured 0.37 ms/frame of CPU for 400 agents (300 walkers + 100 cats) 
 Creating a system samples the terrain once (~0.3 s for a 256×256 area).
 
 **Reading/steering agents.** `const cats = stage.actors(...)`; `cats.agents[0]` is live
-`{ x, y, z, heading, speed, state }` — attach a light (`onUpdate(() => lamp.position.set(a.x, a.y + 3, a.z))`),
+`{ x, y, z, heading, pitch, speed, air, state }` (`air`: 0 perched … 1 flying) — attach a light (`onUpdate(() => lamp.position.set(a.x, a.y + 3, a.z))`),
 make a camera follow, or drive them with a function behavior. `cats.dispose()` removes them.
 
 ## Making a creature (rigs)
@@ -115,9 +165,16 @@ stage.actors({ creature: 'frog', count: 5 });
 
 Roles: `body` (bob), `head` (nod while walking, looks around idle; `anim.graze` dips it), `tail`
 (sway; `anim.tailSpeed`, `tailLift`), `leg` (swing; `side` ±1, `pair` 0 front / 1 back → trot), `arm`
-(opposite the legs), `wing` (flap about z; `anim.flap`, `flapSpeed`, `glide`), `fin` (wiggle), `static`.
-For anything else give the part `animate: ({ t, agent, moving, phase }) => ({ rx, ry, rz })`.
-`rig(parts, { scale, speed, stride, sprint, idle, lift, fly, swim, anim })`.
+(opposite the legs), `wing` (flap about z; `anim.flap`, `flapSpeed`, `glide`; perched → `anim.fold`
+`{ rx, ry, rz }` of the side +1 wing, default swept back along the body; butterflies `{ rz: 1.45 }` = closed
+upright), `fin` (wiggle), `static`. For anything else give the part
+`animate: ({ t, agent, moving, phase, air, hang, flap, rx, ry, rz }) => ({ rx, ry, rz, dx, dy, dz })` (role
+angles in, your rotation about the pivot + an offset out) or `=> ({ matrix })` (a `THREE.Matrix4` rig-space
+transform — chain joints: body → head/legs/wings; see `about()`/`chain()`/`birdPosture()` in `gen/canopy.js`:
+birds pitching up when perched, the gibbon's pendulum swing). `air` (0 perched … 1 flying) blends postures.
+`rig(parts, { scale, speed, stride, sprint, idle, lift, fly, swim, hang, center, anim })` — `hang`: the
+rig-space y that sits on an explicit agent y (a hanger's grip, a sitter's seat; see above), `center`: the point
+placed at the agent's x/z (the seat or the feet, so spots land right).
 
 Shortcuts: most four-legged animals are one `quadruped({ width, length, legH, bodyH, headW, headH,
 headD, snout, ears, tail, coat, pattern, scale, anim })` call (see `dog`/`sheep`/`pig` in creatures.js);

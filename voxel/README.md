@@ -14,7 +14,12 @@ static/voxel/
     actors.js        animated creatures (instanced rigs, behaviors, terrain following)
     registry.js      defineGenerator/Creature/Shading/Look/Particles — everything nameable
     world.js cluster.js pool.js worker.js   big scenes: parallel region modules, clusters, worker meshing
+    tour.js          stage.flyTo / stage.tour: camera fly-to and the "Explore" points-of-interest tour
+    nav.js           camera: { pan: true } — move around big scenes (right-drag / two fingers / WASD / double-tap)
     gen/{nature,terrain,build,creatures}.js generators + creatures (all registered with examples)
+    gen/{jungle,understory,karst,thai}.js   tropical sets: rainforest trees, understory, karst towers + caves, Thai
+                     lake/jungle structures (materials JUNGLE, UNDERSTORY, KARST, THAI)
+    gen/{wildlife,canopy}.js  rainforest animals (elephant, tiger, tapir… / gibbon, hornbill, kingfisher, bat…)
     vendor/          three.js r186 (single minified module) + lil-gui
   <slug>/            one folder per piece: index.html + scene.js (+ preview.jpg)
   cottage/           the demo piece — read it first, it's ~50 lines

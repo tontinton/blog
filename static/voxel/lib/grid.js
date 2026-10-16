@@ -139,11 +139,12 @@ export class VoxelGrid {
   /** Recolor in place: fn(x, y, z, id) → new id (0 deletes, undefined keeps). Optional inclusive bounds. */
   paint(fn, a, b) {
     const edits = [];
-    this.forEach((x, y, z, id) => {
-      if (a && (x < a[0] || y < a[1] || z < a[2] || x > b[0] || y > b[1] || z > b[2])) return;
+    const visit = (x, y, z, id) => {
       const r = fn(x, y, z, id);
       if (r !== undefined && r !== id) edits.push(x, y, z, this.mat(r));
-    });
+    };
+    if (a) this.forEachIn([Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.min(a[2], b[2])], [Math.max(a[0], b[0]), Math.max(a[1], b[1]), Math.max(a[2], b[2])], visit); // only chunks overlapping the box
+    else this.forEach(visit);
     for (let i = 0; i < edits.length; i += 4) this.set(edits[i], edits[i + 1], edits[i + 2], edits[i + 3]);
     return this;
   }
@@ -164,10 +165,28 @@ export class VoxelGrid {
 
   /** Highest solid y in column (x, z) at or below `fromY`, or -Infinity. */
   top(x, z, fromY) {
-    const b = this.bounds();
-    if (!b) return -Infinity;
-    for (let y = Math.min(fromY ?? b.max[1], b.max[1]); y >= b.min[1]; y--) if (this.get(x, y, z)) return y;
+    // walks only this column's chunks (top → bottom): no full-grid bounds() rescan after every write
+    x = Math.floor(x); z = Math.floor(z);
+    const r = this._cyRange();
+    if (!r) return -Infinity;
+    const hi = fromY == null ? (r[1] + 1) * CHUNK - 1 : Math.floor(fromY);
+    const cx = x >> CHUNK_BITS, cz = z >> CHUNK_BITS, col = (x & M) | ((z & M) << CHUNK_BITS);
+    for (let cy = Math.min(hi >> CHUNK_BITS, r[1]); cy >= r[0]; cy--) {
+      const c = this._chunk(cx, cy, cz, false);
+      if (!c) continue;
+      const d = c.data;
+      for (let ly = cy === hi >> CHUNK_BITS ? hi & M : M; ly >= 0; ly--) if (d[col | (ly << (2 * CHUNK_BITS))]) return cy * CHUNK + ly;
+    }
     return -Infinity;
+  }
+
+  /** [min cy, max cy] over existing chunks (cached; reset when chunks are added/removed). */
+  _cyRange() {
+    if (this._cyr !== undefined && this._cyrN === this.chunks.size) return this._cyr;
+    let lo = Infinity, hi = -Infinity;
+    for (const c of this.chunks.values()) { if (c.cy < lo) lo = c.cy; if (c.cy > hi) hi = c.cy; }
+    this._cyrN = this.chunks.size;
+    return (this._cyr = this.chunks.size ? [lo, hi] : null);
   }
 
   /**

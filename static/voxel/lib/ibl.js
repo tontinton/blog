@@ -3,9 +3,12 @@
 // most expensive part of the voxel shader. But a voxel face's normal is one of 6 axis directions, and with
 // the default orthographic camera the view direction is the same for every pixel, so both lookups only
 // depend on (face direction, material roughness). This renders them for every material of a palette into
-// a small float texture (x = material id, y = direction; row 6 = irradiance per direction) whenever the
+// a small float table (x = material id, y = direction; row 6 = irradiance per direction) whenever the
 // environment, the camera direction or the palette changes, and the voxel shader (material.js) reads one
 // texel instead. Bevel edges, water ripples, rotated models and perspective radiance keep the full path.
+// Every palette's table is a 7-row band of one atlas texture (uIblRow = its first row): a scene with dozens of
+// creature palettes redraws them all into one render target while the camera turns — one pass, not one
+// render-target switch per palette (each one a flush on the tile-based GPUs of phones).
 import * as THREE from './three.js';
 
 const ROWS = 7;
@@ -14,10 +17,10 @@ const FRAG = /* glsl */ `
 #define ENVMAP_TYPE_CUBE_UV
 #include <common>
 #include <cube_uv_reflection_fragment>
-uniform sampler2D envMap; uniform sampler2D uMat; uniform vec3 uView;
+uniform sampler2D envMap; uniform sampler2D uMat; uniform vec3 uView; uniform int uRow0;
 vec3 axisDir(int d) { float s = (d & 1) == 1 ? -1.0 : 1.0; int a = d >> 1; return a == 0 ? vec3(s, 0, 0) : a == 1 ? vec3(0, s, 0) : vec3(0, 0, s); }
 void main() {
-  ivec2 p = ivec2(gl_FragCoord.xy);
+  ivec2 p = ivec2(gl_FragCoord.xy) - ivec2(0, uRow0);
   if (p.y == 6) { gl_FragColor = vec4(p.x < 6 ? textureCubeUV(envMap, axisDir(p.x), 1.0).rgb : vec3(0.0), 1.0); return; }
   vec3 n = axisDir(p.y);
   // same roughness the voxel shader ends up with on a flat face (lights_physical_fragment, no geometry roughness)
@@ -29,23 +32,29 @@ void main() {
 export class IblTable {
   constructor(renderer) {
     this.renderer = renderer;
-    this.tables = new Map(); // palette → { rt, key }
+    this.tables = new Map(); // palette → { row (first atlas row), key }
+    this.atlas = null;
+    this.uniform = { value: null }; // the atlas texture, shared by every voxel material
     this.on = new THREE.Vector2(0, 0); // shared by every voxel material: (irradiance table valid, radiance table valid)
     this.quad = new THREE.FullScreenQuad(null);
     this.mat = null;
     this.maxWidth = Math.min(4096, renderer.capabilities.maxTextureSize);
+    this.maxRows = Math.min(4096, renderer.capabilities.maxTextureSize);
     this.type = renderer.extensions.has('EXT_color_buffer_float') ? THREE.FloatType : THREE.HalfFloatType;
   }
 
   /** Uniforms a voxel material needs for `palette` (merge into its uniforms object). */
   uniformsFor(palette) {
     const t = this._table(palette);
-    return { uIbl: t.uniform, uIblOn: { value: this.on } };
+    return { uIbl: this.uniform, uIblRow: t.rowUniform, uIblOn: { value: this.on } };
   }
 
   _table(palette) {
     let t = this.tables.get(palette);
-    if (!t) this.tables.set(palette, (t = { rt: null, key: '', uniform: { value: null } }));
+    if (!t) {
+      const row = this.tables.size * ROWS;
+      this.tables.set(palette, (t = { row, key: '', rowUniform: { value: row } }));
+    }
     return t;
   }
 
@@ -58,24 +67,32 @@ export class IblTable {
     if (!ok) { this.on.set(0, 0); return; }
     const view = camera.isOrthographicCamera ? new THREE.Vector3(0, 0, 1).transformDirection(camera.matrixWorld) : null;
     const viewKey = view ? `${view.x},${view.y},${view.z}` : 'p';
+    let width = 0;
+    for (const P of palettes) { this._table(P); width = Math.max(width, 6, P.size); }
+    const rows = this.tables.size * ROWS;
+    if (width > this.maxWidth || rows > this.maxRows) { this.on.set(0, 0); return; }
+    if (!this.atlas || this.atlas.width < width || this.atlas.height < rows) {
+      const w = Math.max(width, this.atlas ? this.atlas.width : 64), h = Math.min(this.maxRows, Math.max(rows, this.atlas ? this.atlas.height * 2 : ROWS * 8));
+      this.atlas?.dispose();
+      this.atlas = new THREE.WebGLRenderTarget(w, h, { type: this.type, depthBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false });
+      this.uniform.value = this.atlas.texture;
+      for (const t of this.tables.values()) t.key = ''; // a fresh atlas: draw every table
+    }
+    const todo = [];
     for (const P of palettes) {
-      const n = Math.max(6, P.size);
-      if (n > this.maxWidth) { this.on.set(0, 0); return; }
-      const t = this._table(P);
+      const n = Math.max(6, P.size), t = this._table(P);
       const key = `${env.uuid}|${viewKey}|${P.version}|${n}`;
       if (t.key === key) continue;
       t.key = key;
-      if (!t.rt || t.rt.width < n) {
-        t.rt?.dispose();
-        t.rt = new THREE.WebGLRenderTarget(Math.max(n, t.rt ? t.rt.width * 2 : 64), ROWS, { type: this.type, depthBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false });
-        t.uniform.value = t.rt.texture;
-      }
-      this._render(t.rt, env, P.texture(), view ?? new THREE.Vector3(0, 0, 1));
+      todo.push([P, t.row, n]);
     }
+    if (todo.length) this._render(todo, env, view ?? new THREE.Vector3(0, 0, 1));
     this.on.set(1, view ? 1 : 0);
   }
 
-  _render(rt, env, matTex, view) {
+  // draw the tables of `todo` ([palette, row, width]) into their bands of the atlas: one render target, a
+  // viewport per table, nothing cleared
+  _render(todo, env, view) {
     const h = env.image.height, maxMip = Math.log2(h) - 2;
     const defines = { CUBEUV_TEXEL_WIDTH: 1 / (3 * Math.max(2 ** maxMip, 7 * 16)), CUBEUV_TEXEL_HEIGHT: 1 / h, CUBEUV_MAX_MIP: `${maxMip}.0` };
     const dk = JSON.stringify(defines);
@@ -83,21 +100,32 @@ export class IblTable {
       this.mat?.dispose();
       this.mat = new THREE.ShaderMaterial({
         vertexShader: 'void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }', fragmentShader: FRAG, defines,
-        uniforms: { envMap: { value: null }, uMat: { value: null }, uView: { value: new THREE.Vector3() } }, depthTest: false, depthWrite: false,
+        uniforms: { envMap: { value: null }, uMat: { value: null }, uView: { value: new THREE.Vector3() }, uRow0: { value: 0 } }, depthTest: false, depthWrite: false,
       });
       this.mat.userData.dk = dk;
     }
-    const u = this.mat.uniforms;
-    u.envMap.value = env; u.uMat.value = matTex; u.uView.value.copy(view);
-    const r = this.renderer, prev = r.getRenderTarget();
+    const u = this.mat.uniforms, rt = this.atlas;
+    u.envMap.value = env; u.uView.value.copy(view);
+    const r = this.renderer, prev = r.getRenderTarget(), ac = r.autoClear;
     this.quad.material = this.mat;
-    r.setRenderTarget(rt);
-    this.quad.render(r);
-    r.setRenderTarget(prev);
+    r.autoClear = false;
+    try {
+      for (const [P, row, n] of todo) {
+        u.uMat.value = P.texture(); u.uRow0.value = row;
+        rt.viewport.set(0, row, n, ROWS);
+        r.setRenderTarget(rt);
+        this.quad.render(r);
+      }
+    } finally {
+      rt.viewport.set(0, 0, rt.width, rt.height);
+      r.autoClear = ac;
+      r.setRenderTarget(prev);
+    }
   }
 
   dispose() {
-    for (const t of this.tables.values()) t.rt?.dispose();
+    this.atlas?.dispose();
+    this.atlas = null;
     this.tables.clear();
     this.mat?.dispose();
     this.quad.dispose();
@@ -109,7 +137,7 @@ export function iblChunk(chunk) {
   const renamed = chunk.replace(/getIBLIrradiance\(/g, 'vxIBLIrradiance0(').replace(/getIBLRadiance\(/g, 'vxIBLRadiance0(');
   return `${renamed}
 #ifdef USE_ENVMAP
-uniform sampler2D uIbl; uniform vec2 uIblOn;
+uniform sampler2D uIbl; uniform int uIblRow; uniform vec2 uIblOn;
 int vxAxis(vec3 n) {
   vec3 a = abs(n);
   if (a.x > 0.99999) return n.x > 0.0 ? 0 : 1;
@@ -120,14 +148,14 @@ int vxAxis(vec3 n) {
 vec3 getIBLIrradiance( const in vec3 normal ) {
   if (uIblOn.x > 0.5) {
     int ax = vxAxis(transformNormalByInverseViewMatrix(normal, viewMatrix));
-    if (ax >= 0) return PI * texelFetch(uIbl, ivec2(ax, 6), 0).rgb * envMapIntensity;
+    if (ax >= 0) return PI * texelFetch(uIbl, ivec2(ax, uIblRow + 6), 0).rgb * envMapIntensity;
   }
   return vxIBLIrradiance0(normal);
 }
 vec3 getIBLRadiance( const in vec3 viewDir, const in vec3 normal, const in float roughness ) {
   if (uIblOn.y > 0.5 && roughness == min(max(matT(vMid, 1).x * roughness, 0.0525), 1.0)) {
     int ax = vxAxis(transformNormalByInverseViewMatrix(normal, viewMatrix));
-    if (ax >= 0) return texelFetch(uIbl, ivec2(vMid, ax), 0).rgb * envMapIntensity;
+    if (ax >= 0) return texelFetch(uIbl, ivec2(vMid, uIblRow + ax), 0).rgb * envMapIntensity;
   }
   return vxIBLRadiance0(viewDir, normal, roughness);
 }

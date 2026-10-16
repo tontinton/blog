@@ -12,7 +12,7 @@ const entries = V.list(kind).filter((e) => (!category || e.category === category
 if (!entries.length) throw new Error(`catalog: nothing registered for kind=${kind}${category ? ` category=${category}` : ''}`);
 const cell = Number(q.get('cell') ?? 26), cols = Number(q.get('cols') ?? Math.ceil(Math.sqrt(entries.length * 1.4))), h = Math.floor(cell / 2) - 2;
 const stage = new Stage({ look: q.get('look') ?? 'daylight', camera: { yaw: 35, pitch: 38 } });
-const P = new Palette({ ...NATURE, ...BUILD, water: { color: '#4ab4c8', kind: 'water', opacity: 0.4 } });
+const P = new Palette({ ...NATURE, ...BUILD, ...V.JUNGLE, ...V.UNDERSTORY, ...V.KARST, ...V.THAI, water: { color: '#4ab4c8', kind: 'water', opacity: 0.4 } });
 const at = (i) => [(i % cols - (cols - 1) / 2) * cell, Math.floor(i / cols) * cell - ((Math.ceil(entries.length / cols) - 1) / 2) * cell];
 const pad = (g, water) => { V.tile(g, [-h, -h], [h, h], { depth: 2, corner: 2, seed: 1 }); if (water) V.pond(g, [0, 0], { radius: h - 3, depth: 2, shore: false }); };
 

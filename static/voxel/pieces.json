@@ -25,5 +25,22 @@
       "animals",
       "animated"
     ]
+  },
+  {
+    "slug": "khao_sok",
+    "short": "ks",
+    "title": "Khao Sok",
+    "description": "Morning mist over Cheow Lan lake: sheer limestone karsts, a waterfall with a rainbow, a giant dipterocarp with gibbons and a hornbill nest, elephants bathing, a floating raft village, a bat cave and a drowned temple — the rainforest of Khao Sok, Thailand, to explore stop by stop.",
+    "date": "2026-10-15",
+    "preview": "/voxel/khao_sok/preview.jpg",
+    "tags": [
+      "nature",
+      "jungle",
+      "thailand",
+      "animals",
+      "animated",
+      "big",
+      "explore"
+    ]
   }
 ]

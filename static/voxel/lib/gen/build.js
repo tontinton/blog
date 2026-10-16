@@ -371,7 +371,8 @@ export const PEOPLE = {
 export function person(g, p, o = {}) {
   const R = R_(o);
   const P = g.palette;
-  const c = (k, v) => (v != null ? g.mat(v) : P.color(R.pick(PEOPLE[k]), null));
+  const col = (v) => (typeof v === 'string' && /^(#|rgb|hsl)/.test(v) ? P.color(v, null) : g.mat(v)); // material name/id or a CSS colour
+  const c = (k, v) => (v != null ? col(v) : P.color(R.pick(PEOPLE[k]), null));
   const skin = c('skin', o.skin), shirt = c('shirt', o.shirt), pants = c('pants', o.pants), hair = c('hair', o.hair);
   const side = o.side ?? '+z';
   const [fx, fz] = SIDES[side];
@@ -389,8 +390,8 @@ export function person(g, p, o = {}) {
   put(at(-1, ty), skin);
   if (o.pose === 'wave') { put(at(2, ty + 2), shirt); put(at(2, ty + 3), skin); } else put(at(2, ty), skin);
   const hy = ty + torso;
-  for (const a of [0, 1]) { put(at(a, hy), skin); put(at(a, hy + 1), skin); put(at(a, hy + 2), o.hat ? g.mat(o.hat) : hair); put(at(a, hy + 1, -1), hair); }
-  if (o.hat) for (const a of [-1, 0, 1, 2]) put(at(a, hy + 2), g.mat(o.hat));
+  for (const a of [0, 1]) { put(at(a, hy), skin); put(at(a, hy + 1), skin); put(at(a, hy + 2), o.hat ? col(o.hat) : hair); put(at(a, hy + 1, -1), hair); }
+  if (o.hat) for (const a of [-1, 0, 1, 2]) put(at(a, hy + 2), col(o.hat));
   return g;
 }
 
