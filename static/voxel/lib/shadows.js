@@ -28,12 +28,19 @@ export class SunShadows {
     this.key = 0;
     this.n = 0;
     this.stats = { still: 0, moving: 0, renders: 0 };
-    const sm = stage.renderer.shadowMap, orig = sm.render.bind(sm);
-    this._orig = orig;
-    sm.autoUpdate = false;
     // shadow casters are picked by camera layers: every layer (particles live on their own)
     this.layersCam = new THREE.Camera();
     this.layersCam.layers.enableAll();
+    this.hook();
+  }
+
+  /** Take over renderer.shadowMap.render. Again after a restored context: three replaces the shadowMap object. */
+  hook() {
+    const stage = this.stage, sm = stage.renderer.shadowMap;
+    if (sm === this._sm) return;
+    this._sm = sm;
+    this._orig = sm.render.bind(sm);
+    sm.autoUpdate = false;
     sm.render = (lights, scene) => {
       if (!this.pending || scene !== stage.scene) return;
       this.pending = false;

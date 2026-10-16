@@ -309,12 +309,12 @@ export default function build(g, ctx) {
   ctx.emit('actors', { creature: 'dog', behavior: 'still', spots: [[-58.5, gy(-58, 111) + 1, 111.5, 250]] });
   ctx.emit('actors', { ...LIFE.butterfly, count: 5, area: [[-82, 78], [-72, 96]] });   // over the heliconias, not the bloom
   ctx.emit('actors', { ...LIFE.butterfly, count: 3, area: [[-66, 66], [-58, 76]] });
-  ctx.emit('particles', { preset: 'cubes', colors: ['#1c1c1c', '#2c3b22'], size: 0.2, count: 10, turbulence: 2, glow: 0, box: [[FLOWERS[0].x - 2, FLOWERS[0].y + 1, FLOWERS[0].z - 2], [FLOWERS[0].x + 2, FLOWERS[0].y + 4, FLOWERS[0].z + 2]] });   // carrion flies
+  ctx.emit('particles', { preset: 'cubes', colors: ['#1c1c1c', '#2c3b22'], shadow: false, size: 0.2, count: 10, turbulence: 2, glow: 0, box: [[FLOWERS[0].x - 2, FLOWERS[0].y + 1, FLOWERS[0].z - 2], [FLOWERS[0].x + 2, FLOWERS[0].y + 4, FLOWERS[0].z + 2]] });   // carrion flies
   ctx.emit('actors', { ...LIFE.kingfisher, spots: br.posts.filter((_, i) => i % 3 === 0).map((p) => [p[0] + 0.5, p[1] + 1, p[2] + 0.5]) });
   ctx.emit('actors', { ...LIFE.dragonfly, count: 2, area: [[-58, 42], [-44, 54]] });
 
   // morning air: leaves twirling down under the canopy, sunlit motes over the rafflesia clearing
-  ctx.emit('particles', { preset: 'leaves', count: 46, colors: ['#c8a040', '#9ab040', '#7a8a30', '#b0703a'], box: [[-118, 8, 66], [-46, 32, 114]] });
+  ctx.emit('particles', { preset: 'leaves', count: 46, shadow: false, colors: ['#c8a040', '#9ab040', '#7a8a30', '#b0703a'], box: [[-118, 8, 66], [-46, 32, 114]] });
   ctx.emit('particles', { preset: 'dust', count: 110, box: [[-106, 6, 96], [-70, 22, 117]] });
   ctx.emit('particles', { preset: 'mist', count: 16, motion: 'drift', size: 8, opacity: 0.1, glow: 1, colors: ['#ffffff', '#f6efe4'], speed: 0.04, box: [[-60, 3, 42], [-43, 5, 56]] });   // haze on the river
 

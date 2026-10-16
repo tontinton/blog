@@ -120,7 +120,7 @@ export default function build(g, ctx) {
   kid(g, [91, DY + 3, 10], '+x', { seed: 2, pose: 'jump', shirt: 'rafts_cream' });                    // arms up on the board end
   cannonball(g, 98, WY + 4, 11);                                                                         // …and one mid-air, tucked into a cannonball
   foamRing(g, 99, 12, 2);                                                                                // the water ringing below him
-  ctx.emit('particles', { preset: 'cubes', colors: ['#ffffff', '#dff3ef'], size: 0.3, count: 16, speed: 1, box: [[98, WY + 1, 11], [100, WY + 5, 13]] });
+  ctx.emit('particles', { preset: 'cubes', colors: ['#ffffff', '#dff3ef'], shadow: false, size: 0.3, count: 16, speed: 1, box: [[98, WY + 1, 11], [100, WY + 5, 13]] });
   {                                                                                                      // a kid sitting on the raft's edge, legs over the water
     const sk = g.palette.color('#b07850'), hr = g.palette.color('#1e1612');
     for (const x of [88, 89]) for (const [y, z, m] of [[DY + 1, 13, 'rafts_shorts'], [DY + 1, 14, 'rafts_shorts'], [DY, 14, sk], [DY + 2, 13, 'rafts_khaki'], [DY + 3, 13, 'rafts_khaki'], [DY + 4, 13, sk], [DY + 5, 13, hr], [DY + 4, 12, hr]])

@@ -382,9 +382,9 @@ export default function build(g, ctx) {
   // morning ground mist lying low in the glade and under the forest round the giant's foot
   ctx.emit('particles', { preset: 'mist', motion: 'drift', count: 30, size: 10, sizeJitter: 0.4, opacity: 0.13, glow: 1, colors: ['#ffffff', '#f6efe4'], speed: 0.03, turbulence: 0.25, box: [[-20, by + 2, z0 + 4], [B[0] - 6, by + 4, G[1] + 26]] });
   ctx.emit('particles', { preset: 'dust', count: 90, box: [[G[0] - 4, by, G[1] + 2], [G[0] + 22, by + 26, G[1] + 26]] });
-  ctx.emit('particles', { preset: 'leaves', count: 24, colors: ['#78a83a', '#c8a040', '#4a8a34'], box: [[G[0] - 18, by + 4, G[1] - 18], [G[0] + 18, by + 70, G[1] + 18]] });
+  ctx.emit('particles', { preset: 'leaves', count: 24, shadow: false, colors: ['#78a83a', '#c8a040', '#4a8a34'], box: [[G[0] - 18, by + 4, G[1] - 18], [G[0] + 18, by + 70, G[1] + 18]] });
   const cb = [B[0] + cbd[0] * 5.5, cbY - 3, B[1] + cbd[1] * 5.5];
-  ctx.emit('particles', { preset: 'cubes', count: 26, colors: ['#2a2010', '#c8962c'], size: 0.22, sizeJitter: 0.3, speed: 1.4, turbulence: 2, glow: 0, box: [[cb[0] - 3, cb[1] - 3, cb[2] - 3], [cb[0] + 3, cb[1] + 4, cb[2] + 3]] });
+  ctx.emit('particles', { preset: 'cubes', count: 26, shadow: false, colors: ['#2a2010', '#c8962c'], size: 0.22, sizeJitter: 0.3, speed: 1.4, turbulence: 2, glow: 0, box: [[cb[0] - 3, cb[1] - 3, cb[2] - 3], [cb[0] + 3, cb[1] + 4, cb[2] + 3]] });
 
   // ---- points of interest ------------------------------------------------------------------------------------
   ctx.emit('poi', { label: 'The giant dipterocarp', icon: '🌳', target: [G[0], by + 52, G[1]], zoom: 2.2 });

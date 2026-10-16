@@ -26,6 +26,7 @@ import { MAX_LIGHT_LAYERS } from './post.js';
 export const PARTICLE_LAYER = 1;
 export const JITTER = 1.5;   // max light offset (voxels) the gradient layers cover
 export const GRAD_STEP = 0.5; // finite-difference step (voxels)
+export const PROBE = 15;      // frames between re-measuring a scene whose partial frames didn't pay off
 
 const _v = new THREE.Vector3(), _box = new THREE.Box3(), _b2 = new THREE.Box3(), _m = new THREE.Matrix4();
 const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _sun = new THREE.Vector3();
@@ -44,6 +45,7 @@ export class RenderCache {
     this.size = [0, 0];
     this.stats = { mode: 'full', rects: 0, coverage: 1, layers: 0 };
     this.noLayers = false;  // a model's GLSL hooks make lighting non-linear (cel shading…)
+    this._sinceProbe = 0;
   }
 
   /** Forget everything: the next frame is drawn in full. */
@@ -75,8 +77,13 @@ export class RenderCache {
       this.valid = false;
       this.reason = 'new light layer';
     }
-    // what changed on screen (always tracked, so item bounds stay current)
-    const rects = cameraMoved || dirty ? null : this._rects();
+    // what changed on screen (always tracked, so item bounds stay current). While partial frames don't pay
+    // off (wind through a forest, hundreds of agents) the rects are only re-measured every PROBE frames: in
+    // between, only the items' bounds are kept current — projecting and merging hundreds of rects every frame
+    // just to draw a full frame anyway costs milliseconds of CPU
+    const probe = !(this.cost >= 0.6) || ++this._sinceProbe >= PROBE;
+    if (probe) this._sinceProbe = 0;
+    const rects = cameraMoved || dirty || s.cache === false ? null : probe ? this._rects() : this._rects(true);
     const W = s.post.w, H = s.post.h;
     let area = 0;
     for (const r of rects ?? []) area += r.w * r.h;
@@ -90,7 +97,9 @@ export class RenderCache {
     // while the camera moves or when too much changes anyway; at rest a 'seed' (light layers + base scene
     // without particles) that the next frames redraw partially
     let mode, seed = false;
-    if (cameraMoved || !worth || (!structural && this.valid && cost > 0.6)) {
+    if (s.cache === false) {
+      mode = 'full'; // no cache: plain full frames (particles in the scene pass), never seeds for partial frames
+    } else if (cameraMoved || !worth || (!structural && this.valid && cost > 0.6)) {
       mode = 'full';
       if (!cameraMoved && this.reason === '') this.reason = 'too much changed';
     } else if (structural || !this.valid) {
@@ -157,8 +166,11 @@ export class RenderCache {
     return { structural, factor, move };
   }
 
-  /** Screen rectangles (render-target pixels, bottom-left origin) covering everything that changed. */
-  _rects() {
+  /**
+   * Screen rectangles (render-target pixels, bottom-left origin) covering everything that changed.
+   * boxesOnly: only bring the tracked items' bounds up to date (no projection, no merging) → null.
+   */
+  _rects(boxesOnly = false) {
     const s = this.stage, out = [], seen = new Set();
     const sunCasts = s.sun.visible && s.sun.castShadow && s.renderer.shadowMap.enabled;
     _a.setFromMatrixPosition(s.sun.matrixWorld); _b.setFromMatrixPosition(s.sun.target.matrixWorld);
@@ -168,7 +180,7 @@ export class RenderCache {
     const water = s.uniforms.uWater.value.z > 0 && s.uniforms.uWater.value.y > 0;
     const why = (this.why = []); // debugging: [source, rect]
     let src = '';
-    const add = (box, shadow, emissiveOnly = false) => { const r = this._project(box, shadow && sunCasts ? sun : null); if (r) { r.emissive = emissiveOnly; out.push(r); why.push([src, r.w * r.h]); } };
+    const add = (box, shadow, emissiveOnly = false) => { if (boxesOnly) return; const r = this._project(box, shadow && sunCasts ? sun : null); if (r) { r.emissive = emissiveOnly; out.push(r); why.push([src, r.w * r.h]); } };
     const track = (key, box, sig, shadow) => {
       // an item that moved: redraw where it was and where it is
       seen.add(key);
@@ -192,6 +204,7 @@ export class RenderCache {
       track(`m${m.group.id}`, _box, visible ? matrixSig(m.inner.matrixWorld) : 'hidden', casts);
       if (!visible) continue;
       if (m.timeHooks) add(_box, casts && m.moving);
+      if (boxesOnly) continue;
       for (const mesh of m.meshes) {
         if (!mesh.geometry.userData.boxes) continue;
         if (!m.moving && !mesh.isInstancedMesh) { still.push(mesh); key.push(mesh.id, mesh.castShadow); continue; }
@@ -200,7 +213,7 @@ export class RenderCache {
       }
     }
     const k = key.join(',');
-    if (k !== this._stillKey) {
+    if (boxesOnly) { /* the still rects are cached per camera pose: nothing to update */ } else if (k !== this._stillKey) {
       this._stillKey = k;
       const mine = [];
       const addMine = (box, shadow, emissiveOnly = false) => { const r = this._project(box, shadow && sunCasts ? sun : null); if (r) { r.emissive = emissiveOnly; mine.push(r); } };
@@ -208,7 +221,7 @@ export class RenderCache {
       this._stillRects = mergeRects(mine, s.post.w, s.post.h, 12);
     }
     src = 'anim (still models, cached per camera pose)';
-    for (const r of this._stillRects) { out.push({ ...r }); why.push([src, r.w * r.h]); }
+    if (!boxesOnly) for (const r of this._stillRects) { out.push({ ...r }); why.push([src, r.w * r.h]); }
     // actors: every agent, every frame (legs, tails, heads move even when standing)
     for (const a of s.actorSystems) {
       if (!isVisible(a.object)) continue;
@@ -242,6 +255,7 @@ export class RenderCache {
       track(`o${o.id}`, _box, sig, casts);
     }
     for (const k of [...this.items.keys()]) if (!seen.has(k)) { const it = this.items.get(k); this.items.delete(k); add(it.box, true); }
+    if (boxesOnly) return null;
     // a glossy floor reflects everything (particles included): redraw it whenever anything moves
     const G = s.look.ground;
     if (G.reflect > 0 && G.type !== 'none' && (out.length || s.particleSystems.some((p) => p.object.visible && isVisible(p.object)))) {

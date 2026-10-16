@@ -141,10 +141,15 @@ const stage = new Stage({
   },
   ui: { title, subtitle, credit, back: '/' | url | false, backLabel, hint: true | 'text' | false, loader: true, theme: 'auto'|'light'|'dark', css },
   // (the default hint matches the input — touch or mouse — and says how to move when camera.pan is on)
-  pixelRatio (max, default min(devicePixelRatio, 2); 1.5 on touch), adaptive: true (when slow: 4× → 2× MSAA, then lower resolution), msaa (4; 2 on hi-dpi), container, shotTime,
+  pixelRatio (max, default min(devicePixelRatio, 2); 1.5 on touch), adaptive: true (when slow: 4× → 2× MSAA, then a lower render
+  resolution — the canvas keeps its size, the composite upsamples: no canvas-resize stall), msaa (4; 2 on hi-dpi), container, shotTime,
+  keepArrays (default: touch devices) — keep the meshes' JS vertex arrays (~100 bytes a quad) so a lost WebGL context restores
+  instantly; otherwise a restore re-meshes in the worker pool (mobile Safari drops contexts on app switches / GPU pressure),
   fps: { max: 60, idle: 30, idleAfter: 3 } (frame pacing: cap on fast screens, drop to `idle` fps when the camera hasn't moved for
-  `idleAfter` s — keeps laptops cool; `?fps=N` forces a rate),
-  cache: true (incremental rendering, below; false = redraw everything every frame, like `?nocache`),
+  `idleAfter` s — keeps laptops cool; 0 = every display frame, e.g. `{ max: 0, idle: 0 }` for 120 Hz smoothness in a
+  piece that is always animating; `?fps=N` forces a rate),
+  cache: true (incremental rendering, below; false = plain full frames every frame, like `?nocache` — the right call for a
+  piece where wind/water/hundreds of actors change most of the picture anyway: steadier frame times, no particle-layer target),
 });
 ```
 

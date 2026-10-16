@@ -63,14 +63,19 @@ export class Stage {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.domElement.style.cssText = 'display:block;width:100%;height:100%;touch-action:none;outline:none';
     el.appendChild(this.renderer.domElement);
-    // voxel meshes drop their JS arrays once uploaded (releaseArrays): after a lost context, re-mesh from the grids
-    this.renderer.domElement.addEventListener('webglcontextrestored', () => {
-      for (const m of this.models) if (m.grid) this._mesh(m);
-      this.shadows.dispose(); this.invalidate();
-    });
+    // A lost context (mobile Safari drops big scenes under memory/GPU pressure) comes back with every buffer and
+    // texture re-uploaded from JS — but what was only ever rendered on the GPU is gone: voxel meshes dropped
+    // their JS arrays (releaseArrays: re-mesh from the grids), and the sky environment (PMREM), the flat-face IBL
+    // tables and the shadow maps come back black (no sky light: dark, flat, ugly). Rebuild all of them.
+    // Phones lose it all the time (every trip to another app can do it), so there they keep the JS arrays and a
+    // restore is just a re-upload (opts.keepArrays, below); elsewhere the models re-mesh in the worker pool.
+    this.renderer.domElement.addEventListener('webglcontextrestored', () => this._restore());
     const coarse = window.matchMedia?.('(pointer: coarse)').matches; // phones/tablets: cap a bit lower
     this.maxDpr = Number(params.get('dpr')) || opts.pixelRatio || Math.min(window.devicePixelRatio || 1, coarse ? 1.5 : 2);
     this.dpr = this.maxDpr;
+    // keep the voxel meshes' JS vertex/index arrays after upload (~100 bytes a quad): a lost context then
+    // restores instantly instead of re-meshing every model (seconds of frozen screen on a big world)
+    this.keepArrays = opts.keepArrays ?? !!coarse;
 
     this.scene = new THREE.Scene();
     this.scene.matrixWorldAutoUpdate = false; // once per frame in _render, not once per render call (shadow, layers, rects…)
@@ -356,7 +361,8 @@ export class Stage {
     model.materials = mats;
     // the GPU has the geometry after its first draw; while the model keeps its grid (picking walks the
     // voxels, a lost GL context re-meshes from it) the JS copies of the vertex/index arrays can go
-    for (const res of results) for (const geo of [res.solid, res.transparent]) if (geo) releaseArrays(geo, model);
+    model.released = !this.keepArrays;
+    if (model.released) for (const res of results) for (const geo of [res.solid, res.transparent]) if (geo) releaseArrays(geo, model);
     // [material]: three draws geometry.groups, which face culling (cull.js) points at the visible directions
     // instances are drawn in rotation classes (0/90/180/270° about Y): within a class every copy's faces
     // point the same way, so face culling works for instances too (cull.js). Any other rotation → 'free'.
@@ -552,7 +558,7 @@ export class Stage {
       const G = this.look.ground, cam = this.camera;
       cam.updateMatrixWorld(); // this frame's view (the controls just moved it)
       const fr = G.reflect > 0 && G.type !== 'none' ? null : _frustum.setFromProjectionMatrix(_pm.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse));
-      for (const a of sys) { a.step(dt, t); if (!fr || a.inView(fr)) a.pose(t); }
+      for (const a of sys) { a.step(dt, t); if (!fr || a.inView(fr)) a.pose(t, fr); }
       return;
     }
     // frozen clock (?t=, shots): replay from spawn in lockstep at 30 Hz, once — deterministic, and followers see their leaders move
@@ -826,7 +832,8 @@ export class Stage {
   resize() {
     const w = this.el.clientWidth || window.innerWidth, h = this.el.clientHeight || window.innerHeight;
     this.w = w; this.h = h;
-    this.renderer.setPixelRatio(this.dpr);
+    // the canvas stays at the full pixel ratio; adaptive resolution (this.dpr) only scales the render targets
+    this.renderer.setPixelRatio(this.maxDpr);
     this.renderer.setSize(w, h, false);
     this.post.setSize(w * this.dpr, h * this.dpr);
     if (this._frame) this._frameCamera(); else this._layoutDirty = true; // don't reset the orbit on resize
@@ -845,6 +852,7 @@ export class Stage {
     return new Promise((ok) => {
       const first = () => {
         this.frame();
+        this._warmup();
         this.ui?.ready();
         if (!this.shot) {
           const loop = (now) => {
@@ -889,6 +897,45 @@ export class Stage {
     const ppu = cam.isOrthographicCamera ? (H / (cam.top - cam.bottom)) * cam.zoom : H / (2 * Math.tan((cam.fov * DEG) / 2) * cam.position.distanceTo(c.target));
     const left = (Math.abs(d.theta) + Math.abs(d.phi)) * cam.position.distanceTo(c.target) * ppu + p.length() * ppu;
     if (left > 0 && left < 0.1) { d.set(0, 0, 0); p.set(0, 0, 0); }
+  }
+
+  // after a lost + restored WebGL context: three re-uploads every buffer/texture it still has the data of;
+  // rebuild what only ever lived on the GPU (released mesh arrays, sky environment, IBL tables, shadow maps)
+  async _restore() {
+    this.pmrem = new THREE.PMREMGenerator(this.renderer);
+    this._envKey = null; this._makeEnv();
+    for (const t of this.ibl.tables.values()) t.key = '';
+    this.shadows.hook(); // three made a new renderer.shadowMap
+    this.shadows.dispose(); this.shadows.invalidate();
+    this._warmed = false;
+    const lost = this.models.filter((m) => m.released && m.grid);
+    if (lost.length) {
+      this._restoring = true; // no frames while meshes have no buffers
+      try {
+        const pool = getPool();
+        for (const m of lost) await (pool ? this._meshParallel(m, pool) : this._mesh(m));
+      } finally { this._restoring = false; }
+    }
+    if (this._started) this._warmup(); // every program is gone with the context
+    this.renderCache.invalidate(); this.invalidate();
+  }
+
+  // Compile every program and allocate every render target the frame paths will use, while the loader is
+  // still up: a material first drawn mid-animation (a cluster panned into view, the particle layer + its
+  // composite variants on the first cached frame) otherwise compiles on the spot — a freeze of up to seconds
+  // on mobile GPUs.
+  _warmup() {
+    if (this._warmed || this.shot) return;
+    this._warmed = true;
+    const r = this.renderer, prev = r.getRenderTarget();
+    try {
+      r.setRenderTarget(this.post.scene); // the variants the scene target uses (linear output), not the canvas'
+      r.compile(this.scene, this.camera);
+    } finally { r.setRenderTarget(prev); }
+    if (!this.cache || !this.particleSystems.length) return;
+    const rc = this.renderCache, plan = rc.plan;
+    rc.plan = () => ({ mode: 'full', seed: true, rects: null, cameraMoved: false });
+    try { this._render(this.time); } finally { rc.plan = plan; rc.invalidate(); }
   }
 
   stop() { cancelAnimationFrame(this._raf); this._raf = null; this._loop = null; }
@@ -955,7 +1002,13 @@ export class Stage {
     if (!slow) return;
     const floor = this.maxDpr > 1 ? 1 : 0.75;
     if (this.post.samples > 2 && this.opts.msaa == null && !params.has('msaa')) { this.post.setSamples(2); this.invalidate(); }
-    else if (this.dpr > floor) { this.dpr = Math.max(floor, this.dpr - 0.25); this.resize(); }
+    else if (this.dpr > floor) {
+      // render resolution only: resizing the canvas makes the browser wait for all queued GPU work and
+      // reallocate the drawing buffer (a hitch — seconds on a slow phone); the composite upsamples instead
+      this.dpr = Math.max(floor, this.dpr - 0.25);
+      this.post.setSize(this.w * this.dpr, this.h * this.dpr);
+      this.invalidate();
+    }
   }
 
   // models whose transform changed since the last frame are "moving" from then on (out of the static shadow cache)
@@ -979,6 +1032,7 @@ export class Stage {
    * + light layers) → particle layer → post. Returns false when nothing needed drawing.
    */
   _render(t, force = false) {
+    if (this._restoring) return false;
     this.scene.updateMatrixWorld();
     this._trackMotion();
     const rc = this.renderCache;

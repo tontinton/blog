@@ -134,6 +134,8 @@ cost the quads.
   variant is one rigged InstancedMesh (joint matrices in a texture) however many there are.
 - **Cached shadows**: still geometry goes into the shadow map once; only moving casters are redrawn per
   frame (swaying leaves included — `look.sun.update: 'static'` freezes those; `N` updates every N frames).
+  Lit particles (`leaves`, `cubes`) are moving casters too: give big or many such emits `shadow: false`
+  so a static-sun world has no per-frame shadow work at all.
 - **Face culling + draw order**: only the ≤ 3 face directions that can face the camera (or the sun, in the
   shadow pass) are drawn, front-to-back within each direction — half the vertices, less overdraw.
 - **Water is one pass**: refracting water reuses the opaque image instead of rendering the scene twice.
@@ -142,12 +144,22 @@ cost the quads.
 - **Adaptive resolution**: when frames take longer than their pacing allows (> 26 ms while the camera moves),
   the stage first drops 4× MSAA to 2×, then the pixel ratio in 0.25 steps (`adaptive: false` to disable);
   touch devices cap DPR at 1.5.
-- **Per-frame CPU** stays flat with hundreds of agents: actor systems outside the view keep walking but
-  aren't posed; the swaying / rippling voxels' screen rects are projected once per camera pose; the moving
+- **Per-frame CPU** stays flat with hundreds of agents: actors outside the view keep walking but aren't
+  posed (whole systems, and single agents of shadowless systems); while partial frames don't pay off (wind
+  everywhere) the render cache re-measures what changed only every 15 frames; the swaying / rippling voxels'
+  screen rects are projected once per camera pose; the moving
   shadow casters restore their own patches of the shadow map; every palette's IBL table is a band of one
   atlas (one pass while the camera turns, not a render-target switch per creature palette).
+- **No mid-session stalls**: every program and render target the frame paths use is compiled/allocated behind
+  the loader (`_warmup`); adaptive resolution only resizes render targets, never the canvas; a lost WebGL
+  context (phones: app switches, GPU pressure) restores everything that only lived on the GPU — sky
+  environment, IBL tables, shadow maps (three replaces `renderer.shadowMap`: the shadow cache re-hooks it).
+  An always-moving world (wind everywhere, hundreds of actors) wants `cache: false`: partial frames never pay
+  off there, and on tiled GPUs (phones, Apple silicon) a partial redraw still loads/stores the whole MSAA target.
 - **Memory**: once on the GPU, voxel meshes drop their JS-side vertex/index arrays (~100 bytes a quad) —
-  picking walks the grid instead. `keepGrid: false` frees the grid instead (the meshes then keep their
+  picking walks the grid instead (not on touch devices: `keepArrays`, so a lost context restores instantly).
+  three's shadow map render target carries an unused RGBA color texture next to its depth: a 4096² map is
+  128 MB — consider `look.sun.mapSize: 2048` on phones. `keepGrid: false` frees the grid instead (the meshes then keep their
   arrays for picking; `rebuild` doesn't work).
 - **Bakes** run per cluster inside the workers (AO) and only over lit regions (emissive light).
 - Measure with `?debug` (fps, draw calls, triangles overlay) and the `stats` line shot.mjs prints.

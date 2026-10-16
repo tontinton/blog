@@ -60,7 +60,7 @@ import { srgbToLinear } from './color.js';
 import { lookup, list } from './registry.js';
 
 const _m = new THREE.Matrix4(), _o = new THREE.Matrix4(), _t = new THREE.Matrix4();
-const _box = new THREE.Box3();
+const _box = new THREE.Box3(), _sph = new THREE.Sphere();
 const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _v = new THREE.Vector3(), _s = new THREE.Vector3(), _y = new THREE.Vector3(0, 1, 0), _x = new THREE.Vector3(1, 0, 0);
 const DEG = Math.PI / 180;
 
@@ -589,14 +589,27 @@ export class Actors {
       if (ag.y < y0) y0 = ag.y; if (ag.y > y1) y1 = ag.y;
       if (ag.z < z0) z0 = ag.z; if (ag.z > z1) z1 = ag.z;
     }
-    const pad = (this._reach ??= Math.max(...this.rigs.map((r) => Math.max(...r.size))) + 2) * this.scale * 1.2 + 1;
+    const pad = this._pad();
     _box.min.set(x0 - pad, y0 - pad, z0 - pad); _box.max.set(x1 + pad, y1 + pad, z1 + pad);
     return frustum.intersectsBox(_box);
   }
 
-  /** Write instance matrices for time t. */
-  pose(t) {
-    for (const ag of this.agents) this._pose(ag, t);
+  // how far an agent's voxels (and blob) reach from its position, world units
+  _pad() { return (this._reach ??= Math.max(...this.rigs.map((r) => Math.max(...r.size))) + 2) * this.scale * 1.2 + 1; }
+
+  /**
+   * Write instance matrices for time t. frustum (world space): skip the agents outside it — they keep their
+   * last pose until they come back into view (systems casting real sun shadows pose every agent: their
+   * shadows can fall into view from outside).
+   */
+  pose(t, frustum = null) {
+    if (frustum && !this.sets.some((s) => s.mesh.castShadow)) {
+      const pad = this._pad();
+      for (const ag of this.agents) {
+        _sph.center.set(ag.x, ag.y, ag.z); _sph.radius = pad * Math.max(1, ag.scale / this.scale);
+        if (frustum.intersectsSphere(_sph)) this._pose(ag, t);
+      }
+    } else for (const ag of this.agents) this._pose(ag, t);
     for (const s of this.sets) { s.mesh.instanceMatrix.needsUpdate = true; s.rigTex.needsUpdate = true; s.uniforms.uMat.value = s.rig.palette.texture(); }
     if (this.blob) this.blob.instanceMatrix.needsUpdate = true;
   }
