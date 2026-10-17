@@ -43,6 +43,15 @@ function occupancy(grid, cls, margin, region) {
   return { occ, min, size, sx, sy, sz };
 }
 
+let bakerIds = 0;
+
+// per face direction: [stepX, stepY, stepZ, tDeltaX, tDeltaY, tDeltaZ] for each ray (Baker.ao's DDA)
+function rayTables(dirs) {
+  return dirs.map((set) => Float64Array.from(set.flatMap(([dx, dy, dz]) => [
+    dx > 0 ? 1 : -1, dy > 0 ? 1 : -1, dz > 0 ? 1 : -1, Math.abs(1 / (dx || 1e-9)), Math.abs(1 / (dy || 1e-9)), Math.abs(1 / (dz || 1e-9)),
+  ])));
+}
+
 export class Baker {
   /**
    * opts.ao:    { radius = 6, rays = 20, strength handled in shader }  (true → defaults)
@@ -70,6 +79,18 @@ export class Baker {
     if (opts.light) this.light = bakeLight(grid, palette, cls, opts.light === true ? {} : opts.light, opts.region, opts.spill);
   }
 
+  /** Plain data (typed arrays, no grid) for postMessage: a worker meshes with Baker.from(data). Cached. */
+  serialize() {
+    return (this._data ??= { id: ++bakerIds, aoOn: this.aoOn, radius: this.radius, dirs: this.dirs, vol: this.vol, light: this.light });
+  }
+
+  /** A Baker from serialize() data: samples AO and light like the original (no grid needed). */
+  static from(d) {
+    const b = Object.create(Baker.prototype);
+    Object.assign(b, { aoOn: d.aoOn, radius: d.radius, dirs: d.dirs, vol: d.vol, light: d.light, _data: d });
+    return b;
+  }
+
   /** occupancy at world cell (outside volume = empty) */
   solid(x, y, z) {
     const V = this.vol;
@@ -80,28 +101,28 @@ export class Baker {
 
   /** Ray-traced openness (0 = buried, 1 = open sky) of air cell (x,y,z) looking along face dir d. */
   ao(x, y, z, d) {
-    const dirs = this.dirs[d], R = this.radius, V = this.vol;
+    const rays = (this._rays ??= rayTables(this.dirs))[d], R = this.radius, V = this.vol;
     const occ = V.occ, sx = V.sx, sy = V.sy, sz = V.sz, nx = V.size[0], ny = V.size[1], nz = V.size[2];
+    const x0 = x - V.min[0], y0 = y - V.min[1], z0 = z - V.min[2], i0 = x0 * sx + z0 * sz + y0 * sy;
     let sum = 0;
-    for (let i = 0; i < dirs.length; i++) {
-      const dx = dirs[i][0], dy = dirs[i][1], dz = dirs[i][2];
-      // Amanatides–Woo DDA from the cell center
-      let cx = x - V.min[0], cy = y - V.min[1], cz = z - V.min[2];
-      const stx = dx > 0 ? 1 : -1, sty = dy > 0 ? 1 : -1, stz = dz > 0 ? 1 : -1;
-      const tdx = Math.abs(1 / (dx || 1e-9)), tdy = Math.abs(1 / (dy || 1e-9)), tdz = Math.abs(1 / (dz || 1e-9));
+    for (let r = 0; r < rays.length; r += 6) {
+      // Amanatides–Woo DDA from the cell center (per-ray steps and t increments precomputed in rayTables)
+      const stx = rays[r], sty = rays[r + 1], stz = rays[r + 2], tdx = rays[r + 3], tdy = rays[r + 4], tdz = rays[r + 5];
+      const ix = stx * sx, iy = sty * sy, iz = stz * sz;
+      let cx = x0, cy = y0, cz = z0, i = i0;
       let tmx = 0.5 * tdx, tmy = 0.5 * tdy, tmz = 0.5 * tdz;
       let t = 0, hit = R;
       while (t < R) {
-        if (tmx < tmy && tmx < tmz) { cx += stx; t = tmx; tmx += tdx; }
-        else if (tmy < tmz) { cy += sty; t = tmy; tmy += tdy; }
-        else { cz += stz; t = tmz; tmz += tdz; }
+        if (tmx < tmy && tmx < tmz) { cx += stx; i += ix; t = tmx; tmx += tdx; }
+        else if (tmy < tmz) { cy += sty; i += iy; t = tmy; tmy += tdy; }
+        else { cz += stz; i += iz; t = tmz; tmz += tdz; }
         if (t >= R || cx < 0 || cy < 0 || cz < 0 || cx >= nx || cy >= ny || cz >= nz) break;
-        if (occ[cx * sx + cz * sz + cy * sy] === 1) { hit = t; break; }
+        if (occ[i] === 1) { hit = t; break; }
       }
       const k = hit / R;
       sum += k * (2 - k); // occlusion falls off smoothly with hit distance
     }
-    return sum / dirs.length;
+    return sum / (rays.length / 6);
   }
 
   /** Baked light rgb at air cell, written into out[o..o+2]. */
@@ -152,9 +173,14 @@ function bakeLight(grid, palette, cls, opts, region, spill = false) {
     return null;
   }
   const SX = 1, SZ = size[0], SY = size[0] * size[2];
-  const open = new Uint8Array(N);
-  for (let y = 0; y < size[1]; y++) for (let z = 0; z < size[2]; z++) for (let x = 0; x < size[0]; x++)
-    open[x + z * SZ + y * SY] = cls[grid.get(x + min[0], y + min[1], z + min[2])] === 1 ? 0 : 1;
+  // open = not solid, cell by cell as grid.get() sees it — but visiting only the voxels (a context view's layers
+  // lowest precedence first, so the one get() would return is written last), not every cell of the volume
+  const open = new Uint8Array(N).fill(1);
+  const layers = grid.bakeLayers ?? [[grid, null]];
+  for (let k = layers.length - 1; k >= 0; k--) {
+    const [g, map] = layers[k];
+    g.forEachIn(min, max, (x, y, z, v) => { open[x - min[0] + (z - min[2]) * SZ + (y - min[1]) * SY] = cls[map ? map.get(v) ?? 0 : v] === 1 ? 0 : 1; });
+  }
   const rgb = new Uint16Array(N * 3); // light * 4096 (max 16)
   const level = new Uint16Array(N);
   // 18-neighborhood: 6 faces (cost 16) + 12 edges (cost 23 ≈ 16√2), distances in 1/16 voxel

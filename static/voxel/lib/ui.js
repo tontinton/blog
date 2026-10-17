@@ -7,6 +7,24 @@
 import { luminance, rgb } from './color.js';
 import { LOOKS, merge, DEFAULT_LOOK } from './looks.js';
 
+// The loading screen. links.mjs also writes it straight into every piece's index.html (markup + this CSS,
+// before any script), so it paints with the HTML instead of after ~1 MB of modules; createUI adopts it.
+export const LOADER_CSS = `
+.vx-loader { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; background: var(--vx-bg); color: var(--vx-fg);
+  transition: opacity .9s cubic-bezier(.4,0,.2,1), visibility 0s .9s; font: 500 12px/1.4 ui-sans-serif, system-ui, sans-serif; letter-spacing: .14em; text-transform: uppercase; }
+.vx-loader.done { opacity: 0; visibility: hidden; pointer-events: none; }
+.vx-loader .vx-l { display: grid; justify-items: center; gap: 14px; }
+.vx-loader h2 { margin: 0; font: 600 clamp(22px, 4vw, 40px)/1.1 ui-serif, Georgia, serif; letter-spacing: .02em; text-transform: none; }
+.vx-bar { width: 160px; height: 2px; background: color-mix(in srgb, var(--vx-fg) 18%, transparent); overflow: hidden; }
+.vx-bar i { display: block; height: 100%; width: 100%; background: var(--vx-fg); transform-origin: left; transform: scaleX(0); transition: transform .35s; }
+.vx-cube { width: 18px; height: 18px; background: var(--vx-fg); opacity: .8; animation: vx-spin 1.6s cubic-bezier(.6,0,.4,1) infinite; }
+@keyframes vx-spin { 0% { transform: rotate(0) scale(.8); } 50% { transform: rotate(90deg) scale(1); } 100% { transform: rotate(180deg) scale(.8); } }
+@media (prefers-reduced-motion: reduce) { .vx-cube { animation: none; } }
+`;
+
+/** Loader markup; titleHtml (already escaped) null = no title line. */
+export const loaderHTML = (titleHtml = null) => `<div class="vx-l"><div class="vx-cube"></div>${titleHtml != null ? `<h2>${titleHtml}</h2>` : ''}<div class="vx-bar"><i></i></div><div class="vx-lbl">Loading</div></div>`;
+
 const CSS = `
 .vx-ui { position: fixed; inset: 0; pointer-events: none; z-index: 5; font: 500 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
   color: var(--vx-fg); -webkit-font-smoothing: antialiased; }
@@ -19,16 +37,6 @@ const CSS = `
 .vx-title small { display: block; margin-top: 6px; opacity: .45; font-size: 11.5px; }
 .vx-hint { position: absolute; right: max(18px, env(safe-area-inset-right)); bottom: max(18px, env(safe-area-inset-bottom)); opacity: .5; font-size: 12px; letter-spacing: .03em; transition: opacity 1.2s; }
 .vx-hint.gone { opacity: 0; }
-.vx-loader { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; background: var(--vx-bg); color: var(--vx-fg);
-  transition: opacity .9s cubic-bezier(.4,0,.2,1), visibility 0s .9s; font: 500 12px/1.4 ui-sans-serif, system-ui, sans-serif; letter-spacing: .14em; text-transform: uppercase; }
-.vx-loader.done { opacity: 0; visibility: hidden; pointer-events: none; }
-.vx-loader .vx-l { display: grid; justify-items: center; gap: 14px; }
-.vx-loader h2 { margin: 0; font: 600 clamp(22px, 4vw, 40px)/1.1 ui-serif, Georgia, serif; letter-spacing: .02em; text-transform: none; }
-.vx-bar { width: 160px; height: 2px; background: color-mix(in srgb, var(--vx-fg) 18%, transparent); overflow: hidden; }
-.vx-bar i { display: block; height: 100%; width: 100%; background: var(--vx-fg); transform-origin: left; transform: scaleX(0); transition: transform .35s; }
-.vx-cube { width: 18px; height: 18px; background: var(--vx-fg); opacity: .8; animation: vx-spin 1.6s cubic-bezier(.6,0,.4,1) infinite; }
-@keyframes vx-spin { 0% { transform: rotate(0) scale(.8); } 50% { transform: rotate(90deg) scale(1); } 100% { transform: rotate(180deg) scale(.8); } }
-@media (prefers-reduced-motion: reduce) { .vx-cube { animation: none; } }
 @media (max-width: 520px) { .vx-hint { display: none; }
   .vx-hint.vx-move { display: block; left: 50%; right: auto; bottom: auto; top: max(54px, calc(env(safe-area-inset-top) + 44px)); transform: translateX(-50%);
     white-space: nowrap; padding: 5px 12px; border-radius: 999px; opacity: .75; background: color-mix(in srgb, var(--vx-bg-solid, #fff) 60%, transparent);
@@ -39,9 +47,11 @@ const CSS = `
 `;
 
 export function createUI(stage, o = {}) {
+  const early = document.querySelector('.vx-loader'); // the page's static loader (links.mjs), up since first paint
+  if (stage.shot || o.loader === false) early?.remove();
   if (stage.shot) return { ready() {}, frame() {}, interacted() {}, progress() {}, lookChanged() {} };
   const style = document.createElement('style');
-  style.textContent = CSS + (o.css ?? '');
+  style.textContent = CSS + LOADER_CSS + (o.css ?? '');
   document.head.appendChild(style);
   const root = document.createElement('div');
   root.className = 'vx-ui';
@@ -63,13 +73,17 @@ export function createUI(stage, o = {}) {
 
   let loader = null, bar = null, label = null;
   if (o.loader !== false) {
-    loader = document.createElement('div');
-    loader.className = 'vx-loader';
-    loader.innerHTML = `<div class="vx-l"><div class="vx-cube"></div>${o.title ? `<h2></h2>` : ''}<div class="vx-bar"><i></i></div><div class="vx-lbl">Loading</div></div>`;
-    if (o.title) loader.querySelector('h2').textContent = o.title;
+    loader = early ?? document.createElement('div');
+    if (!early) {
+      loader.className = 'vx-loader';
+      loader.innerHTML = loaderHTML(o.title ? '' : null);
+      document.body.appendChild(loader);
+    }
+    const h2 = loader.querySelector('h2');
+    if (h2 && o.title) h2.textContent = o.title;
+    else if (h2 && !o.title) h2.remove();
     bar = loader.querySelector('.vx-bar i');
     label = loader.querySelector('.vx-lbl');
-    document.body.appendChild(loader);
   }
   if (o.back !== false) {
     const a = document.createElement('a');

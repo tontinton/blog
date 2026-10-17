@@ -60,7 +60,8 @@ commit and a direct link to the piece on the branch preview, e.g.
 - Shapes are grid methods (`g.sphere`), generators are functions (`oak(g, p, opts)`).
 - 2–4 shades per material + jitter/noise; emissive 3–8 with `light: { radius }` for lamps; bloom threshold ≥ 1.4.
 - Keep pieces ≤ ~1.5M voxels / ~300k quads (`stats()` is printed by shot.mjs). Frame cost: `node bench.mjs
-  /voxel/<slug>/` (how frames are drawn — skip / post / partial % / full — and ms; `docs/tools.md`). Rendering
+  /voxel/<slug>/` (how frames are drawn — skip / post / partial % / full — and ms; `docs/tools.md`). Load time:
+  `node load.mjs /v/<short>/` (throttled 4G + CPU: loader, modules, scene built, first frame). Rendering
   is incremental: wind sway everywhere, roaming lights or a glossy floor force full frames; flickering a
   light's intensity/color is free; your own uniform/material changes need `stage.invalidate()`.
 - If the lib lacks something, extend the lib (and its docs) rather than hacking it into one piece; after

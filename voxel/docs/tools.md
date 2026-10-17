@@ -42,6 +42,12 @@ and loads `./scene.js?v=…`: a changed file gets a new URL, unchanged ones stay
 `node links.mjs` after any edit (test.mjs fails when a hash is stale). (Module workers — `stage.world` — don't see import maps.) `voxel/lab/` scenes are not
 published — only `static/` is.
 
+The same generated block also carries what makes a piece load fast: the **loading screen itself** (markup + CSS
+from `lib/ui.js`, colored from the page's `<style>` background, title from `<title>`), so it paints with the HTML
+instead of after ~1 MB of modules (`ui.js` adopts it), and a `<link rel="modulepreload">` for every module in
+`scene.js`'s static import graph, so they all download at once instead of one import depth (a round trip) at a
+time. Keep a piece's own modules static imports (`import * as room from './room.js'`), not `import()` in a loop.
+
 ## Screenshots (the main feedback loop)
 ```sh
 node shot.mjs /voxel/<slug>/                               # → out/<slug>.png (960×720)
@@ -135,6 +141,16 @@ Node can mesh too (no WebGL needed) for quick profiling:
 import { VoxelGrid, Palette, buildMesh } from '/abs/path/static/voxel/lib/index.js';
 const r = buildMesh(grid, palette, { bake: { ao: true, light: true } }); console.log(r.stats);
 ```
+
+Load time: `node load.mjs /v/<short>/ [more pages] [--net 4g|wifi|none] [--cpu 4] [--runs 3] [--warm] [--size WxH] [--json out.json]`
+serves `static/` the way Cloudflare Pages does (HTTP/2, brotli, ETag revalidation, `static/_headers`), throttles
+network + CPU like a phone on 4G (default) and prints when the loader painted, the modules arrived, `new Stage()` ran,
+`start()` was called (scene built) and the first frame was up, with requests, KB on the wire and the longest
+main-thread task. `--warm` measures a repeat visit. Compare before/after a change; SwiftShader inflates the first
+frame (shader compile + rasterizing on the CPU) and is noisy at big sizes — `--size 640x400` steadies it, and CDP's
+CPU throttling slows the main thread, not workers. Where load time goes (in order): the module download (~440 KB
+brotli, three.js is 180 of it), generating the grids, meshing + AO/light bakes (main thread for `add`, workers for
+`addAsync` / `world`), shader programs (built in the background since construction — see `precompile`), the first frame.
 
 ## Checking the real site build
 Zola copies `static/` verbatim, so pieces need no build step. To verify the whole blog still builds in a

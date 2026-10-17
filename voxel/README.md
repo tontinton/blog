@@ -37,7 +37,8 @@ voxel/               (repo root, NOT published)
   template/          what new.mjs copies
   lab/               unpublished test scenes (also good worked examples), served at /voxel/_lab/?scene=name
   tools/             new.mjs, shot.mjs, test.mjs (unit tests), check.mjs (render smoke test), serve.mjs, build-vendor.mjs,
-                     links.mjs (short links /v/<short>/), preview.mjs (Cloudflare preview link after a push)
+                     links.mjs (short links /v/<short>/ + the page's loader/import map/preloads), preview.mjs (Cloudflare
+                     preview link after a push), load.mjs (load-time benchmark), bench.mjs (frame cost)
 ```
 
 ## 60-second start

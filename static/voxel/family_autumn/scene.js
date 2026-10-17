@@ -14,6 +14,12 @@
 //      ?skip=cats (leave a module out), ?parts=0 (no animation).
 import { Stage, VoxelGrid, Palette, NATURE, BUILD, sharedBaker } from '../lib/index.js';
 import * as L from './layout.js';
+// static imports (not import() per module): the page preloads them with everything else (links.mjs)
+import * as room from './room.js';
+import * as stub from './stub.js';
+import * as people from './people.js';
+import * as dog from './dog.js';
+import * as cats from './cats.js';
 
 const q = new URLSearchParams(location.search);
 const solo = q.get('solo');
@@ -23,8 +29,7 @@ const want = (solo ? (solo === 'room' ? [] : [{ husband: 'people', wife: 'people
 const useRoom = !skip.has('room') && (!solo || solo === 'room' || q.get('room') === '1');
 const names = [useRoom ? 'room' : 'stub', ...want];
 
-const mods = {};
-for (const n of names) mods[n] = await import(`./${n}.js`);
+const mods = { room, stub, people, dog, cats };
 
 const stage = new Stage({
   look: ['cozy', {

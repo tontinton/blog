@@ -150,8 +150,12 @@ cost the quads.
   screen rects are projected once per camera pose; the moving
   shadow casters restore their own patches of the shadow map; every palette's IBL table is a band of one
   atlas (one pass while the camera turns, not a render-target switch per creature palette).
+- **Loading overlaps**: while the workers mesh the world (assets are built in one of them at the same time), the
+  main thread sets up lights, particles and actors (actors need the voxels, not the meshes), and each worker has a
+  second job queued so it never waits for a busy main thread. Clusters go out biggest first.
 - **No mid-session stalls**: every program and render target the frame paths use is compiled/allocated behind
-  the loader (`_warmup`); adaptive resolution only resizes render targets, never the canvas; a lost WebGL
+  the loader (`precompile` hands them all to the driver at once, built in parallel where the browser has
+  KHR_parallel_shader_compile; `_warmup`); adaptive resolution only resizes render targets, never the canvas; a lost WebGL
   context (phones: app switches, GPU pressure) restores everything that only lived on the GPU — sky
   environment, IBL tables, shadow maps (three replaces `renderer.shadowMap`: the shadow cache re-hooks it).
   An always-moving world (wind everywhere, hundreds of actors) wants `cache: false`: partial frames never pay

@@ -146,6 +146,10 @@ export class Stage {
     this._resize = () => this.resize();
     window.addEventListener('resize', this._resize);
     this.resize();
+    // the post passes don't depend on the scene: start building their programs while the piece builds it
+    try { this.post.precompile(); } catch (e) { console.warn('voxel: precompile failed', e); }
+    // workers: true — boot the meshing workers now (they load their modules while the piece builds its grids)
+    if (opts.workers) getPool(opts.workers === true ? undefined : opts.workers);
   }
 
   // ---- content -------------------------------------------------------------------------------
@@ -172,13 +176,26 @@ export class Stage {
   /**
    * Like add() but meshes clusters in parallel Web Workers (keeps the page responsive; much faster for big
    * grids). Resolves to the group. opts as add() plus workers (0 = main thread), onProgress(fraction).
+   * Several addAsync() calls mesh at the same time but attach in call order (the scene comes out the same
+   * as with add()), so `await Promise.all(parts.map((p) => stage.addAsync(p.grid, …)))` is the fast way
+   * to add many models. A shared baker (bake: { baker }) goes to the workers as data; bake.context meshes
+   * on the main thread.
    */
   async addAsync(grid, opts = {}) {
+    const t0 = performance.now();
     const model = this._newModel(grid, opts);
-    const pool = opts.workers === 0 ? null : getPool(opts.workers);
-    if (pool) await this._meshParallel(model, pool, opts.onProgress);
-    else this._mesh(model);
-    return this._attach(model);
+    // small grids (a head, a tail: a chunk or two) mesh right here, while the workers have the big ones
+    const pool = opts.workers === 0 || opts.bake?.context || grid.chunks.size <= 2 ? null : getPool(opts.workers);
+    const meshed = pool ? this._meshJobs(model, pool, opts.onProgress) : this._meshLocal(model);
+    const prev = this._attaching;
+    const done = (async () => {
+      const results = await meshed;
+      await prev;
+      this._buildMeshes(model, results, t0);
+      return this._attach(model);
+    })();
+    this._attaching = done.catch(() => {});
+    return done;
   }
 
   /**
@@ -223,27 +240,23 @@ export class Stage {
     }
     const tGen = performance.now() - t0;
     await step('Meshing', 0.55);
-    // actors need the voxels (terrain height field): free the grid only after they're placed
-    const free = (spec.model?.keepGrid ?? spec.keepGrid) === false;
-    const group = await this.addAsync(grid, {
-      bake: spec.bake ?? { ao: true, light: true }, cluster: spec.cluster, workers: pool ? undefined : 0,
-      ...(spec.model ?? {}), keepGrid: true, palette: P,
-      onProgress: (f) => step('Meshing', 0.55 + 0.35 * f),
-    });
-    // instanced assets (+ animated props, which are separate copies of an asset)
-    const assets = {}, assetGrids = {};
+    // From here three things overlap: the workers mesh the world (and build the instanced assets), while the
+    // main thread sets up lights, particles and actors (actors only need the voxels, not the meshes).
     const props = extras.filter((e) => e.kind === 'prop');
     const names = [...new Set([...instances.keys(), ...props.map((e) => e.data.asset)])];
-    if (names.length) {
-      if (!spec.assets) throw new Error('regions used ctx.instance() / prop but stage.world() got no `assets` module');
-      await step('Assets', 0.92);
-      const built = pool ? await pool.run({ type: 'assets', url: abs(spec.assets), names, palette: P.serialize() }) : await runAssets(abs(spec.assets), names, P.serialize());
-      for (const name of names) {
-        const ag = (assetGrids[name] = new VoxelGrid(P));
-        mergeInto(ag, P, built[name]);
-        if (instances.has(name)) assets[name] = await this.addAsync(ag, { bake: spec.assetBake ?? { ao: true }, palette: P, name, workers: pool ? undefined : 0, instances: instances.get(name), cluster: 0 });
-      }
-    }
+    if (names.length && !spec.assets) throw new Error('regions used ctx.instance() / prop but stage.world() got no `assets` module');
+    // assets first in the queue: one worker builds them while the others start meshing
+    const assetsBuilt = !names.length ? null
+      : pool ? pool.run({ type: 'assets', url: abs(spec.assets), names, palette: P.serialize() }) : runAssets(abs(spec.assets), names, P.serialize());
+    // actors need the voxels (terrain height field): free the grid only after they're placed
+    const free = (spec.model?.keepGrid ?? spec.keepGrid) === false;
+    const model = this._newModel(grid, {
+      bake: spec.bake ?? { ao: true, light: true }, cluster: spec.cluster, workers: pool ? undefined : 0,
+      ...(spec.model ?? {}), keepGrid: true, palette: P,
+    });
+    this._attach(model); // meshes arrive below; the actors' ground lookup finds the model (and its grid) now
+    const group = model.group;
+    const meshed = pool ? this._meshParallel(model, pool, (f) => step('Meshing', 0.55 + 0.35 * f)) : (this._mesh(model), null);
     // extras: particles, lights, actors, props, custom. Actors that differ only in area/path/center/radius/
     // spots/count/seed (e.g. walkers emitted by every district) merge into one system: one draw call per variant.
     // Each emit stays its own group (hoppers only fly between their own region's spots). Named systems (`id`) and
@@ -259,17 +272,33 @@ export class Stage {
       merged.get(key).groups.push({ area, path, center, radius, spots, count: count ?? (spots ? undefined : 1) }); // spots: Actors picks the default
     }
     const pois = [];   // ctx.emit('poi', { label, icon, target, zoom, yaw }) → stage.tour(pois)
-    for (const e of [...extras.filter((x) => !byId(x)), ...extras.filter(byId)]) { // followers last: their leaders exist when they spawn
+    const ordered = [...extras.filter((x) => !byId(x)), ...extras.filter(byId)]; // followers last: their leaders exist when they spawn
+    // lights before actors: the actors' programs (built as they're added) see the final light setup
+    for (const e of ordered) if (e.kind === 'light' && !e.skip) this.light(e.data);
+    for (const e of ordered) {
       if (e.skip) continue;
       const d = e.data;
       if (e.kind === 'particles') this.particles(d);
-      else if (e.kind === 'light') this.light(d);
       else if (e.kind === 'actors') this.actors({ ...(e.merged ?? d), ground: d.ground ?? 'auto' });
-      else if (e.kind === 'prop') {
-        const g = this.add(assetGrids[d.asset], { palette: P, name: d.asset, bake: spec.assetBake ?? { ao: true }, cluster: 0, position: d.position, rotation: d.rotation, pivot: d.pivot, fit: false });
-        if (d.animate) this.animate(g, d.animate);
-      } else if (e.kind === 'poi') { pois.push({ ...d, group: d.group ?? e.region }); spec.onExtra?.(e); }
-      else spec.onExtra?.(e);
+      else if (e.kind === 'poi') { pois.push({ ...d, group: d.group ?? e.region }); spec.onExtra?.(e); }
+      else if (e.kind !== 'light' && e.kind !== 'prop') spec.onExtra?.(e);
+    }
+    await meshed;
+    this._compileEarly();
+    // instanced assets (+ animated props, which are separate copies of an asset), meshed in parallel, attached in order
+    const assets = {}, assetGrids = {};
+    if (names.length) {
+      await step('Assets', 0.92);
+      const built = await assetsBuilt;
+      for (const name of names) mergeInto((assetGrids[name] = new VoxelGrid(P)), P, built[name]);
+      const inst = names.filter((name) => instances.has(name))
+        .map((name) => [name, this.addAsync(assetGrids[name], { bake: spec.assetBake ?? { ao: true }, palette: P, name, workers: pool ? undefined : 0, instances: instances.get(name), cluster: 0 })]);
+      for (const [name, group] of inst) assets[name] = await group;
+    }
+    for (const e of props) {
+      const d = e.data;
+      const g = this.add(assetGrids[d.asset], { palette: P, name: d.asset, bake: spec.assetBake ?? { ao: true }, cluster: 0, position: d.position, rotation: d.rotation, pivot: d.pivot, fit: false });
+      if (d.animate) this.animate(g, d.animate);
     }
     if (free) { const m = group.userData.model; this._fitGroundFor(m); m.grid = null; }
     const stats = { regions: regions.length, generateMs: Math.round(tGen), totalMs: Math.round(performance.now() - t0), workers: pool?.size ?? 0, perRegionMs: timing, ...group.userData.model.stats };
@@ -317,26 +346,45 @@ export class Stage {
 
   _mesh(model) {
     const t0 = performance.now();
-    const results = this._clusters(model).map((cl) => buildMesh(model.grid, model.palette, { ...this._meshOpts(model), chunks: cl.chunks, bounds: cl.whole ? undefined : { min: cl.min, max: cl.max } }));
-    this._buildMeshes(model, results, t0);
+    this._buildMeshes(model, this._meshLocal(model), t0);
+  }
+
+  _meshLocal(model) {
+    return this._clusters(model).map((cl) => buildMesh(model.grid, model.palette, { ...this._meshOpts(model), chunks: cl.chunks, bounds: cl.whole ? undefined : { min: cl.min, max: cl.max } }));
   }
 
   async _meshParallel(model, pool, onProgress) {
     const t0 = performance.now();
+    this._buildMeshes(model, await this._meshJobs(model, pool, onProgress), t0);
+  }
+
+  // mesh a model's clusters in the worker pool → results for _buildMeshes (geometries made as they arrive)
+  async _meshJobs(model, pool, onProgress) {
     const { grid, palette } = model;
     const list = palette.serialize();
     const clusters = this._clusters(model);
+    const opts = this._meshOpts(model);
+    if (opts.bake?.baker) { // its volumes go to each worker once, the jobs refer to them by id
+      const data = opts.bake.baker.serialize();
+      pool.share(`baker${data.id}`, { type: 'baker', data });
+      opts.bake = { bakerId: data.id };
+    }
     let done = 0;
-    const results = await Promise.all(clusters.map((cl) => {
+    // biggest clusters first (each worker queues a second job: the small ones even out the end); results in order
+    const order = clusters.map((_, i) => i).sort((a, b) => clusters[b].chunks.length - clusters[a].chunks.length);
+    const results = [];
+    await Promise.all(order.map((i) => {
+      const cl = clusters[i];
       const inputs = cl.whole ? cl.chunks : clusterInputs(grid, cl, 1);
       return pool.run({
-        type: 'mesh', palette: list, opts: this._meshOpts(model),
+        type: 'mesh', palette: list, opts,
         chunks: inputs.map((c) => ({ cx: c.cx, cy: c.cy, cz: c.cz, data: c.data })),
         emit: cl.chunks.map((c) => chunkKey(c.cx, c.cy, c.cz)),
         bounds: cl.whole ? undefined : { min: cl.min, max: cl.max },
-      }).then((r) => { onProgress?.(++done / clusters.length); return r; });
+        // geometry as each cluster arrives (the main thread is waiting anyway), not all at the end
+      }).then((r) => { results[i] = { ...r, solid: geometryFromArrays(r.solid), transparent: geometryFromArrays(r.transparent) }; onProgress?.(++done / clusters.length); });
     }));
-    this._buildMeshes(model, results.map((r) => ({ ...r, solid: geometryFromArrays(r.solid), transparent: geometryFromArrays(r.transparent) })), t0);
+    return results;
   }
 
   _buildMeshes(model, results, t0) {
@@ -519,6 +567,7 @@ export class Stage {
     p.object.traverse((o) => o.layers.set(PARTICLE_LAYER));
     this.root.add(p.object);
     this.invalidate();
+    this._compileEarly({ particles: this.cache });
     return p;
   }
 
@@ -532,6 +581,7 @@ export class Stage {
     this.actorSystems.push(a);
     this.root.add(a.object);
     this.invalidate();
+    this._compileEarly();
     return a;
   }
 
@@ -660,6 +710,7 @@ export class Stage {
     this.scene.environment = rt.texture;
     this.scene.environmentIntensity = s.intensity;
     mat.dispose();
+    this.ibl?.precompile(rt.texture);
   }
 
   // ---- camera / layout --------------------------------------------------------------------------
@@ -847,8 +898,6 @@ export class Stage {
   start() {
     this._layout(true);
     this._started = true;
-    this._last = performance.now();
-    this._t0 = this._last;
     return new Promise((ok) => {
       const first = () => {
         this.frame();
@@ -884,8 +933,59 @@ export class Stage {
         // ?bench: log what a frame costs here (at rest, then orbiting) — real-GPU numbers for bench.mjs
         if (params.has('bench') && !this.shot) setTimeout(() => { this.bench({ frames: 120 }); this.bench({ frames: 120, moving: true }); }, 1500);
       };
-      requestAnimationFrame(first);
+      // every program the first frames draw with goes to the driver at once; the first frame waits (the loader
+      // keeps animating) until they're built instead of stalling on each one in turn
+      let built;
+      try { built = this.precompile(); } catch (e) { console.warn('voxel: precompile failed', e); built = Promise.resolve(); }
+      built.then(() => {
+        this._last = performance.now();
+        this._t0 = this._last;
+        requestAnimationFrame(first);
+      });
     });
+  }
+
+  /**
+   * Hand the GPU driver every shader program the next frames will draw with — the scene's materials, the sun
+   * shadow pass's depth materials and the post passes — without waiting for any of them. They build in the
+   * background (in parallel where the browser has KHR_parallel_shader_compile, otherwise at least while the
+   * page keeps doing other loading work) instead of one by one, each freezing the page, when a frame first
+   * draws them. start() runs it and draws once everything is built; calling it earlier (after the last
+   * stage.light) overlaps the compiles with the rest of the loading. Resolves when all programs are ready
+   * (right away where the browser can't tell). post: false leaves the post passes out.
+   */
+  precompile(root = this.scene, post = true) {
+    const r = this.renderer, mats = new Set(), prev = r.getRenderTarget();
+    try {
+      r.setRenderTarget(this.post.scene); // the scene target's variants (linear output), not the canvas'
+      for (const m of r.compile(root, this.camera, this.scene)) mats.add(m);
+      // the sun shadow pass draws casters with their custom depth materials (side flipped like three's
+      // shadow pass does), in this scene's light state
+      const proxies = new THREE.Group(), seen = new Set();
+      root.traverse((o) => {
+        const d = o.isMesh && o.castShadow && o.customDepthMaterial, m = Array.isArray(o.material) ? o.material[0] : o.material;
+        if (!d || seen.has(d) || !m) return;
+        seen.add(d);
+        d.side = m.shadowSide ?? SHADOW_SIDE[m.side];
+        const p = o.isInstancedMesh ? new THREE.InstancedMesh(o.geometry, d, 1) : new THREE.Mesh(o.geometry, d);
+        if (o.isInstancedMesh) p.instanceColor = o.instanceColor;
+        proxies.add(p);
+      });
+      for (const m of r.compile(proxies, this.camera, this.scene)) mats.add(m);
+    } finally { r.setRenderTarget(prev); }
+    if (post) for (const m of this.post.precompile({ water: !!this._split(), particles: this.cache && this.particleSystems.length > 0 })) mats.add(m);
+    return programsReady(r, mats);
+  }
+
+  // particles / actors just added — pieces add them after their models and lights, so the scene's programs are
+  // likely final: hand them all to the driver now, to build while the piece keeps loading (a light added
+  // later changes them; start() then compiles the ones it really needs)
+  _compileEarly(post = null) {
+    if (this._started) return;
+    try {
+      this.precompile(this.scene, false);
+      if (post) this.post.precompile(post);
+    } catch (e) { console.warn('voxel: precompile failed', e); } // only a head start: start() compiles anyway
   }
 
   // OrbitControls damping decays geometrically and only stops at ~1e-6 rad: end it once the motion left is
@@ -1490,4 +1590,19 @@ function patchShadowChunk() {
 					for ( int i = 0; i < VOXEL_SHADOW_SAMPLES; i ++ ) if ( ( i & 3 ) != 3 ) shadow += texture( shadowMap, vec3( shadowCoord.xy + vogelDiskSample( i, VOXEL_SHADOW_SAMPLES, phi ) * radius, shadowCoord.z ) );
 					shadow /= float( VOXEL_SHADOW_SAMPLES );
 				} else shadow /= float( VOXEL_SHADOW_SAMPLES / 4 );`);
+}
+
+const SHADOW_SIDE = { [THREE.FrontSide]: THREE.BackSide, [THREE.BackSide]: THREE.FrontSide, [THREE.DoubleSide]: THREE.DoubleSide };
+
+// resolves once every material's program reports it's built (KHR_parallel_shader_compile; without it three
+// reports ready at once and the first draw waits instead). Polled without blocking; gives up after 15 s.
+function programsReady(renderer, materials) {
+  const P = renderer.properties, left = new Set(materials), until = performance.now() + 15000;
+  return new Promise((ok) => {
+    const check = () => {
+      for (const m of left) { const p = P.get(m).currentProgram; if (!p || p.isReady()) left.delete(m); }
+      if (!left.size || performance.now() > until) ok(); else setTimeout(check, 8);
+    };
+    check();
+  });
 }

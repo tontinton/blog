@@ -404,6 +404,30 @@ export class Post {
     return m;
   }
 
+  /**
+   * Hand the driver the programs of the passes a frame will draw (want: { dof, water, particles }; particles =
+   * the cached-frame path that composites a particle layer) without waiting for any of them: they build in the
+   * background (in parallel where the browser has KHR_parallel_shader_compile) instead of one after the other,
+   * each stalling the main thread, the first time a pass draws. Returns the materials (Stage polls readiness).
+   */
+  precompile(want = {}) {
+    const r = this.renderer, L = this.look, list = [];
+    const t = (this._compileTarget ??= this._rt(1, 1)); // any target: linear output, like every pass but the composite
+    const bloom = !L || (L.bloom.enabled !== false && L.bloom.strength > 0);
+    const dof = want.dof ?? !!L?.dof.enabled;
+    for (const p of want.particles ? [false, true] : [false]) {
+      if (bloom) list.push([dof ? this.mDown : this._variant('down', 0, p), t]);
+      if (dof && p) list.push([this._variant('merge', 0, p), t]);
+      list.push([this._variant('comp', 0, dof ? false : p), null]); // the composite draws to the canvas
+    }
+    if (bloom) list.push([this.mDown, t], [this.mUp, t]);
+    if (dof) list.push([this.mDof, t]);
+    if (want.water) list.push([this.mRefr, t]);
+    if (want.particles) list.push([this.mDepthCopy, t]);
+    for (const [m, target] of list) compilePass(r, m, target);
+    return list.map(([m]) => m);
+  }
+
   _rt(w, h) {
     return new THREE.WebGLRenderTarget(w, h, { type: THREE.HalfFloatType, depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, generateMipmaps: false });
   }
@@ -673,11 +697,27 @@ export class Post {
   }
 
   dispose() {
-    [this.scene, this.dofTarget, this.mergeTarget, this.particleTarget, ...Object.values(this.refrTargets ?? {}), ...this.layerTargets, ...this.down, ...this.up].forEach((t) => t?.dispose());
+    [this.scene, this.dofTarget, this.mergeTarget, this.particleTarget, this._compileTarget, ...Object.values(this.refrTargets ?? {}), ...this.layerTargets, ...this.down, ...this.up].forEach((t) => t?.dispose());
     [this.mDown, this.mUp, this.mDof, this.mCopy, this.mDiff, this.mRefr, this.mDepthCopy, ...this.variants.values()].forEach((m) => m.dispose());
     this.quad.dispose();
   }
 }
+
+/**
+ * Build (compile + link, without waiting) the program a FullScreenQuad pass with `material` into `target`
+ * (null = the canvas) will use, so its first draw doesn't stall on the compile.
+ */
+export function compilePass(renderer, material, target) {
+  // stand-in for FullScreenQuad's mesh: same attributes (position + uv, no normals: part of the program key)
+  _pass.quad ??= new THREE.Mesh(new THREE.BufferGeometry()
+    .setAttribute('position', new THREE.Float32BufferAttribute([-1, 3, 0, -1, -1, 0, 3, -1, 0], 3))
+    .setAttribute('uv', new THREE.Float32BufferAttribute([0, 2, 0, 0, 2, 0], 2)));
+  _pass.cam ??= new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+  const prev = renderer.getRenderTarget();
+  _pass.quad.material = material;
+  try { renderer.setRenderTarget(target); renderer.compile(_pass.quad, _pass.cam); } finally { renderer.setRenderTarget(prev); }
+}
+const _pass = {};
 
 const _c = new THREE.Color();
 let _black = null;

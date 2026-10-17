@@ -159,7 +159,7 @@ export function buildMesh(grid, palette, opts = {}) {
   // ray-AO cache per chunk: padded cell × dir → value+1 (0 = not computed)
   const raoCache = bakeAO ? new Float32Array(P * P * P * 6) : null;
   const tmpL = new Float32Array(3);
-  const nbr = new Array(27), fw = [0, 0, 0], cw = [0, 0, 0];
+  const nbr = new Array(27), fw = [0, 0, 0], cw = [0, 0, 0], slices = new Uint8Array(3 * N);
   let faces = 0;
 
   for (const chunk of opts.chunks ?? grid.chunks.values()) {
@@ -167,9 +167,11 @@ export function buildMesh(grid, palette, opts = {}) {
     // padded copy with a 1-voxel border from the 26 neighbor chunks
     for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++)
       nbr[(dx + 1) + (dz + 1) * 3 + (dy + 1) * 9] = grid._chunk(chunk.cx + dx, chunk.cy + dy, chunk.cz + dz, false)?.data ?? null;
+    // which slices along x / y / z hold any voxel (slices without one have no faces: skipped below)
     let any = false;
     const cd = chunk.data;
-    for (let i = 0; i < cd.length; i++) if (cd[i]) { any = true; break; }
+    slices.fill(0);
+    for (let i = 0; i < cd.length; i++) if (cd[i]) { any = true; slices[i & CM] = 1; slices[N + (i >> (2 * CHUNK_BITS))] = 1; slices[2 * N + ((i >> CHUNK_BITS) & CM)] = 1; }
     if (any) for (let y = -1; y <= N; y++) {
       const ny = y < 0 ? 0 : y >= N ? 18 : 9, ly = ((y + N) & CM) << (2 * CHUNK_BITS);
       for (let z = -1; z <= N; z++) {
@@ -191,6 +193,7 @@ export function buildMesh(grid, palette, opts = {}) {
       const sa = ST[a] * s, su = ST[u], sv = ST[v];
       const order = s > 0 ? ORDER_POS : ORDER_NEG;
       for (let i = 0; i < N; i++) {
+        if (!slices[a * N + i]) continue;
         let sliceAny = false;
         const sliceBase = PAD0 + i * ST[a];
         for (let vv = 0; vv < N; vv++) for (let uu = 0; uu < N; uu++) {
@@ -331,6 +334,8 @@ function withContext(grid, palette, ctxs) {
   const maps = ctxs.map((c) => (c.palette && c.palette !== palette ? palette.merge(c.palette) : null));
   const id = (k, v) => (maps[k] ? maps[k].get(v) ?? 0 : v);
   return {
+    // [grid, palette id map | null], highest precedence first (bake.js reads them directly)
+    bakeLayers: [[grid, null], ...ctxs.map((c, k) => [c, maps[k]])],
     bounds() {
       const bs = [grid, ...ctxs].map((g) => g.bounds()).filter(Boolean);
       if (!bs.length) return null;

@@ -10,6 +10,7 @@
 // creature palettes redraws them all into one render target while the camera turns — one pass, not one
 // render-target switch per palette (each one a flush on the tile-based GPUs of phones).
 import * as THREE from './three.js';
+import { compilePass } from './post.js';
 
 const ROWS = 7;
 
@@ -93,17 +94,7 @@ export class IblTable {
   // draw the tables of `todo` ([palette, row, width]) into their bands of the atlas: one render target, a
   // viewport per table, nothing cleared
   _render(todo, env, view) {
-    const h = env.image.height, maxMip = Math.log2(h) - 2;
-    const defines = { CUBEUV_TEXEL_WIDTH: 1 / (3 * Math.max(2 ** maxMip, 7 * 16)), CUBEUV_TEXEL_HEIGHT: 1 / h, CUBEUV_MAX_MIP: `${maxMip}.0` };
-    const dk = JSON.stringify(defines);
-    if (!this.mat || this.mat.userData.dk !== dk) {
-      this.mat?.dispose();
-      this.mat = new THREE.ShaderMaterial({
-        vertexShader: 'void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }', fragmentShader: FRAG, defines,
-        uniforms: { envMap: { value: null }, uMat: { value: null }, uView: { value: new THREE.Vector3() }, uRow0: { value: 0 } }, depthTest: false, depthWrite: false,
-      });
-      this.mat.userData.dk = dk;
-    }
+    this._material(env);
     const u = this.mat.uniforms, rt = this.atlas;
     u.envMap.value = env; u.uView.value.copy(view);
     const r = this.renderer, prev = r.getRenderTarget(), ac = r.autoClear;
@@ -123,7 +114,31 @@ export class IblTable {
     }
   }
 
+  _material(env) {
+    const h = env.image.height, maxMip = Math.log2(h) - 2;
+    const defines = { CUBEUV_TEXEL_WIDTH: 1 / (3 * Math.max(2 ** maxMip, 7 * 16)), CUBEUV_TEXEL_HEIGHT: 1 / h, CUBEUV_MAX_MIP: `${maxMip}.0` };
+    const dk = JSON.stringify(defines);
+    if (!this.mat || this.mat.userData.dk !== dk) {
+      this.mat?.dispose();
+      this.mat = new THREE.ShaderMaterial({
+        vertexShader: 'void main() { gl_Position = vec4(position.xy, 0.0, 1.0); }', fragmentShader: FRAG, defines,
+        uniforms: { envMap: { value: null }, uMat: { value: null }, uView: { value: new THREE.Vector3() }, uRow0: { value: 0 } }, depthTest: false, depthWrite: false,
+      });
+      this.mat.userData.dk = dk;
+    }
+    return this.mat;
+  }
+
+  /** Build the table shader's program for `env` now, ahead of its first draw (post.js compilePass). */
+  precompile(env) {
+    if (!(env?.mapping === THREE.CubeUVReflectionMapping && env.image?.height > 0)) return;
+    const mat = this._material(env);
+    mat.uniforms.envMap.value = env; // the env map's type is part of the program
+    compilePass(this.renderer, mat, (this._compileTarget ??= new THREE.WebGLRenderTarget(1, 1, { type: this.type, depthBuffer: false })));
+  }
+
   dispose() {
+    this._compileTarget?.dispose();
     this.atlas?.dispose();
     this.atlas = null;
     this.tables.clear();

@@ -148,6 +148,7 @@ const stage = new Stage({
   fps: { max: 60, idle: 30, idleAfter: 3 } (frame pacing: cap on fast screens, drop to `idle` fps when the camera hasn't moved for
   `idleAfter` s — keeps laptops cool; 0 = every display frame, e.g. `{ max: 0, idle: 0 }` for 120 Hz smoothness in a
   piece that is always animating; `?fps=N` forces a rate),
+  workers: false (true / n: boot the meshing worker pool now, so it has loaded while the piece builds grids for addAsync),
   cache: true (incremental rendering, below; false = plain full frames every frame, like `?nocache` — the right call for a
   piece where wind/water/hundreds of actors change most of the picture anyway: steadier frame times, no particle-layer target),
 });
@@ -156,7 +157,7 @@ const stage = new Stage({
 | member | |
 |---|---|
 | `add(grid, opts)` → `THREE.Group` | mesh + add. opts: `palette`, `position`, `rotation` (deg Y or `[x,y,z]`), `scale`, `center` (`false` default → grid coords = world coords; `'bottom'`/`'center'`), `pivot: [x,y,z]` (group origin at this grid point — rotate a blade around its hub), `instances: [[x,y,z,rotY,scale] \| {position,rotation,scale}]`, `bake: { ao: true \| { radius: 6, rays: 20 }, light: true, context: grid \| [grids] }` (`context`: grids in the same coordinates that occlude/emit/block light during the bakes but aren't meshed — a moving part added with `pivot` = `position` gets the room's AO + baked lamp light; sync `add` only), `ao` (vertex AO, true), `greedy` (true), `hooks` (GLSL, below), `shading` (`'cel'` \| `['cel', 'rim']` — registered hook bundles), `cluster` (4: mesh as N×N-chunk columns, frustum-culled; 0 = one mesh), `keepGrid` (true; false frees the voxels after meshing), `shadow`, `receive`, `fit` (camera fit, true), `contact` (ground contact shadow, true), `name` |
-| `addAsync(grid, opts)` → Promise\<Group\> | `add` with cluster meshing + bakes in Web Workers (`workers: n \| 0`, `onProgress(f)`) |
+| `addAsync(grid, opts)` → Promise\<Group\> | `add` with cluster meshing + bakes in Web Workers (`workers: n \| 0`, `onProgress(f)`). Many calls mesh at once but attach in call order (same scene as `add`): `await Promise.all(grids.map((g) => stage.addAsync(g, …)))`. Grids of ≤ 2 chunks mesh on the main thread meanwhile; `bake.baker` (sharedBaker) goes to each worker once; `bake.context` meshes on the main thread. Pays off for big grids (many clusters) — a few clusters gain little and can lose on phones' slow cores |
 | `world(spec)` → Promise\<`{ group, grid, palette, assets, extras, pois, stats }`\> | big scene from parallel region modules — see [big-scenes.md](big-scenes.md) |
 | `actors(opts)` → Actors | animated creatures (`{ creature, count, variants, behavior, area, path, target, on, … }`) — see [animation.md](animation.md) |
 | `animate(obj, { spin: [x,y,z] rad/s, bob, sway, speed, phase })` | procedural motion for any object/group |
@@ -173,7 +174,8 @@ const stage = new Stage({
 | `setLook(spec)` / `updateLook(patch)` | live look change (deep-merged) |
 | `setView({ yaw, pitch, zoom, target })` | |
 | `pick(clientX, clientY)` → `{ voxel, id, name, normal, point, group, model, instance }` \| null | voxel under the pointer (a ray walk through the grid; meshes of `keepGrid: false` models are raycast) |
-| `start()` → Promise | first frame + loop; sets `window.VOXEL.ready` |
+| `start()` → Promise | builds every shader program the first frames use (in parallel where the browser can: the loader keeps animating), then first frame + loop; sets `window.VOXEL.ready` |
+| `precompile()` → Promise | hand the driver every program the scene, the sun shadow pass and the post passes will use, without waiting (resolves when built). Automatic: post passes at construction, the scene from `particles()` / `actors()` / `world()` and in `start()` — add lights before particles/actors so those early compiles are the final ones |
 | `captureViews(n, jpeg)` → dataURL | n yaw-rotated views tiled |
 | `stats()` | voxels, quads, mesh/bake ms, draw calls, bounds, `cache` (last frame's mode, redrawn fraction) |
 | `invalidate()` | redraw everything next frame — after changing something the render cache can't see (below) |
